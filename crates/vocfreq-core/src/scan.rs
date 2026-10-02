@@ -16,10 +16,10 @@ use rayon::prelude::*;
 use serde::Serialize;
 use walkdir::WalkDir;
 
-use crate::artifact::{self, DomainMeta, Meta, TableMeta, TokenizerMeta};
+use crate::artifact::{self, Meta, SCHEMA_VERSION, SourceScope, TableMeta, TokenizerMeta};
 use crate::clean;
 use crate::count::{GlobalCounts, LocalCounts};
-use crate::rank::{self, RankedEntry, Tier};
+use crate::rank::{self, RankedEntry};
 use crate::source::{self, SourceRule};
 use crate::tokenize::{TokenizeOpts, Tokenizer};
 use crate::{Error, Result, Totals, VERSION};
@@ -47,14 +47,31 @@ pub struct ScanConfig {
     /// 0 表示按可用核心数自动
     pub threads: usize,
     pub tok: TokenizeOpts,
-    pub user_dict: Option<PathBuf>,
-    pub dict: Option<PathBuf>,
+    /// 词库链，**按装载顺序**：第一份是主词库，其后都是叠加词库；同名条目后者覆盖
+    /// 前者的词频。
+    ///
+    /// 现在没有"内置词典"这回事了，所以这里不能为空 —— [`scan`] 会直接报错，
+    /// 而不是拿一份空词典跑出一张只有单字的废表。
+    pub dicts: Vec<PathBuf>,
     /// 自定义规则；`None` 表示用内置规则做自动探测
     pub rules: Option<Vec<SourceRule>>,
     /// 只处理这些域；空表示全部
     pub only_domains: Vec<String>,
     /// 是否跳过各分域的子表（只要全库总表）
     pub skip_domain_tables: bool,
+    /// 是否**同时**产出全量作用域 `full`。
+    ///
+    /// **默认 `false`**：`scan` 只产各作用域自己的表，`full` 一律由
+    /// 「跨产物合流 [`crate::merge`] + 各作用域 [`crate::compose`] 相加」得到。
+    ///
+    /// 为什么改成默认不产：全量语料（实测 140 GB）常常大到一块盘放不下，只能
+    /// 一个域一个域地扫成**多份**产物 —— 那种工作流里每次 `scan` 都顺手写一遍
+    /// `full` 是纯浪费（写几百 MB，而且因为每次都整体覆盖，前几次写的全被冲掉）。
+    ///
+    /// 置 `true` 只为一种用途：**验证**。一次性全量扫一遍、把 `full` 当对照基准，
+    /// 与"分域扫 + 合流 + 相加"的结果逐条比对（见 `scan.rs` 与 `compose.rs` 的测试）。
+    /// 所以它是内部能力，不对外设开关。
+    pub write_full: bool,
     /// 只保留出现次数 >= 该值的词条（1 表示不过滤）
     pub min_count: u64,
     /// 是否同时写可读 TSV
@@ -81,11 +98,11 @@ impl ScanConfig {
             out: out.into(),
             threads: 0,
             tok: TokenizeOpts::default(),
-            user_dict: None,
-            dict: None,
+            dicts: Vec::new(),
             rules: None,
             only_domains: Vec::new(),
             skip_domain_tables: false,
+            write_full: false,
             min_count: 1,
             write_tsv: true,
             oov_min_count: 500,
@@ -112,7 +129,7 @@ pub enum Progress {
     Plan {
         files: u64,
         bytes: u64,
-        domains: Vec<DomainMeta>,
+        domains: Vec<SourceScope>,
         warnings: Vec<String>,
     },
     /// `units_*` 是工作区间（约 64MB 一块）的数量，不是文件数：大文件会被切成多块。
@@ -198,7 +215,12 @@ pub fn plan_corpus(
         }
         let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         match detect_rule(&path, rules) {
-            Ok(rule) => out.push(FilePlan { path, domain, bytes, rule }),
+            Ok(rule) => out.push(FilePlan {
+                path,
+                domain,
+                bytes,
+                rule,
+            }),
             Err(e) => errors.push(format!("{}: {e}", path.display())),
         }
     }
@@ -219,10 +241,11 @@ pub fn plan_corpus(
 /// 读首行并做规则探测。优先匹配规则里的 `glob` 强制指定。
 fn detect_rule(path: &Path, rules: &[SourceRule]) -> Result<usize> {
     let name = path.to_string_lossy();
-    if let Some(i) = rules
-        .iter()
-        .position(|r| r.glob.as_deref().is_some_and(|g| simple_glob_match(g, &name)))
-    {
+    if let Some(i) = rules.iter().position(|r| {
+        r.glob
+            .as_deref()
+            .is_some_and(|g| simple_glob_match(g, &name))
+    }) {
         return Ok(i);
     }
     let sample = read_first_line(path, MAX_SAMPLE)?;
@@ -483,19 +506,30 @@ struct Written {
     ch: TableMeta,
 }
 
+/// 把一套（词表 + 字表）写进 `<out_dir>`，返回它们在 `meta.json` 里的描述。
+///
+/// `scope` 是**作用域 id**，同时是磁盘上的目录名（`<out>/<scope>/`）。每个作用域
+/// 平级、结构相同 —— 全库的 `full` 与分域的 `news` 没有任何区别，这是 schema v3
+/// 的核心改动（见 `docs/DESIGN.md` §5.0）。
 #[allow(clippy::too_many_arguments)]
 fn write_tables(
     out_dir: &Path,
-    rel_prefix: &str,
+    scope: &str,
     word_entries: &[RankedEntry],
     char_entries: &[RankedEntry],
     word_total: u64,
     char_total: u64,
-    word_tiers: &[Tier],
-    char_tiers: &[Tier],
+    min_count: u64,
     write_tsv: bool,
 ) -> Result<Written> {
     std::fs::create_dir_all(out_dir)?;
+
+    // 阈值按**该表自己的条目数**由前%换算，而不是套一份全局常量：
+    // 分域表只有几万条，前 0.0026% 是 1 条；全库表几百万条，同一个前%是 98 条。
+    let word_pct = rank::default_tier_pct_for("word");
+    let char_pct = rank::default_tier_pct_for("char");
+    let word_tiers = rank::tiers_from_pct(word_pct, word_entries.len() as u64);
+    let char_tiers = rank::tiers_from_pct(char_pct, char_entries.len() as u64);
 
     let w = artifact::write_vfr(
         &out_dir.join("word.vfr"),
@@ -507,11 +541,11 @@ fn write_tables(
     if write_tsv {
         artifact::write_tsv(
             &out_dir.join("word.tsv"),
-            &format!("{rel_prefix}/word"),
+            &artifact::table_key(scope, "word"),
             "word",
             word_entries,
             word_total,
-            word_tiers,
+            &word_tiers,
         )?;
     }
 
@@ -525,32 +559,38 @@ fn write_tables(
     if write_tsv {
         artifact::write_tsv(
             &out_dir.join("char.tsv"),
-            &format!("{rel_prefix}/char"),
+            &artifact::table_key(scope, "char"),
             "char",
             char_entries,
             char_total,
-            char_tiers,
+            &char_tiers,
         )?;
     }
 
     Ok(Written {
         word: TableMeta {
-            path: format!("{rel_prefix}/word"),
+            path: scope.to_string(),
             kind: "word".into(),
             entries: word_entries.len() as u64,
             total_tokens: word_total,
             vfr_bytes: w.file_bytes,
-            tiers: word_tiers.to_vec(),
-            tier_stats: rank::tier_stats(word_entries, word_tiers),
+            tier_stats: rank::tier_stats(word_entries, &word_tiers),
+            tiers: word_tiers,
+            min_count,
+            tier_pct: word_pct.to_vec(),
+            source_tables: Vec::new(),
         },
         ch: TableMeta {
-            path: format!("{rel_prefix}/char"),
+            path: scope.to_string(),
             kind: "char".into(),
             entries: char_entries.len() as u64,
             total_tokens: char_total,
             vfr_bytes: c.file_bytes,
-            tiers: char_tiers.to_vec(),
-            tier_stats: rank::tier_stats(char_entries, char_tiers),
+            tier_stats: rank::tier_stats(char_entries, &char_tiers),
+            tiers: char_tiers,
+            min_count,
+            tier_pct: char_pct.to_vec(),
+            source_tables: Vec::new(),
         },
     })
 }
@@ -589,23 +629,56 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         None
     };
     std::fs::create_dir_all(&cfg.out)?;
+    // 「不要分域表 + 不要 full」会得到一张表都没有的目录，而 `Dataset::open` 打不开
+    // 这种产物（"tables 为空，这个目录是废的"）。前置拦掉，别让用户跑完几十分钟才发现。
+    if cfg.skip_domain_tables && !cfg.write_full {
+        return Err(Error::Other(
+            "配置矛盾：既跳过了各分域的表，又没有要全量作用域 `full`，这样产物里一张表都不会有。\
+             `full` 现在默认不产出（它由「merge 合流 + compose 相加」得到），\
+             想要它请显式打开 `write_full`（CLI：`--full`）。"
+                .into(),
+        ));
+    }
     let log = |level: &str, message: String| {
-        progress(Progress::Log { level: level.to_string(), message })
+        progress(Progress::Log {
+            level: level.to_string(),
+            message,
+        })
     };
 
-    // 1) 分词器
-    let mut tk = match &cfg.dict {
-        Some(p) => Tokenizer::with_dict_file(p, cfg.tok.clone())?,
-        None => Tokenizer::builtin(cfg.tok.clone()),
-    };
-    let user_dict_label = match &cfg.user_dict {
-        Some(p) => {
-            let n = tk.load_user_dict(p)?;
-            log("info", format!("已叠加用户词典 {}（{n} 条）", p.display()));
-            Some(p.display().to_string())
+    // 1) 分词器：整条词库链一次装载
+    let tk = Tokenizer::from_dicts(&cfg.dicts, cfg.tok.clone())?;
+    for (d, rep) in tk.dicts.iter().zip(tk.dict_reports.iter()) {
+        log(
+            "info",
+            format!(
+                "词库 {}：{} 条有效词条（跳过注释 {} 行、空行 {} 行）",
+                d.short(),
+                rep.entries,
+                rep.comments,
+                rep.blanks
+            ),
+        );
+        if rep.freq_omitted > 0 {
+            log(
+                "info",
+                format!(
+                    "  · 其中 {} 条没写词频，已按 jieba 的 suggest_freq 折算",
+                    rep.freq_omitted
+                ),
+            );
         }
-        None => None,
-    };
+        if rep.freq_zero > 0 {
+            log(
+                "warn",
+                format!(
+                    "  · 其中 {} 条把词频显式写成了 0：它们会被登记进词典，但路径概率是 \
+                     ln(0) = -inf，**永远不可能被切分出来**，几乎肯定是笔误",
+                    rep.freq_zero
+                ),
+            );
+        }
+    }
 
     // 2) 计划
     let rules = cfg.rules.clone().unwrap_or_else(source::builtin_rules);
@@ -617,11 +690,11 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
             domain_names.push(p.domain.clone());
         }
     }
-    let domain_metas: Vec<DomainMeta> = domain_names
+    let scope_metas: Vec<SourceScope> = domain_names
         .iter()
         .map(|d| {
             let fs: Vec<&FilePlan> = plans.iter().filter(|p| &p.domain == d).collect();
-            DomainMeta {
+            SourceScope {
                 name: d.clone(),
                 files: fs.len() as u64,
                 bytes: fs.iter().map(|f| f.bytes).sum(),
@@ -633,7 +706,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
     progress(Progress::Plan {
         files: plans.len() as u64,
         bytes: total_bytes,
-        domains: domain_metas.clone(),
+        domains: scope_metas.clone(),
         warnings: warnings.clone(),
     });
     for w in &warnings {
@@ -642,11 +715,11 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
     log(
         "info",
         format!(
-            "发现 {} 个文件 / {:.2} GB，{} 个域：{}",
+            "发现 {} 个文件 / {:.2} GB，{} 个作用域：{}",
             plans.len(),
             total_bytes as f64 / 1e9,
-            domain_metas.len(),
-            domain_metas
+            scope_metas.len(),
+            scope_metas
                 .iter()
                 .map(|d| format!("{}={}", d.name, d.files))
                 .collect::<Vec<_>>()
@@ -657,26 +730,27 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         "info",
         format!(
             "分词器：{}  HMM={}  线程={}",
-            tk.dict_label,
+            tk.dict_label(),
             cfg.tok.hmm,
             rayon::current_num_threads()
         ),
     );
 
-    let word_tiers = rank::default_word_tiers();
-    let char_tiers = rank::default_char_tiers();
-
-    // 3) 逐域扫描 + 落盘
+    // 3) 逐作用域扫描 + 落盘
     let mut overall = GlobalCounts::new();
     let mut overall_totals = Totals::default();
     let mut table_metas: Vec<TableMeta> = Vec::new();
+    // 默认不产 `full`，词典外候选词就得从**某个分域表**里筛。这里留着迄今条目最多的
+    // 那一份（它是全库最有代表性的子集：候选词本来就是"值得回填词库的高频新词"，
+    // 按一个足够大的域筛比按几千条的域筛更有意义）。
+    let mut oov_source: Option<Vec<RankedEntry>> = None;
 
-    for d in &domain_metas {
+    for d in &scope_metas {
         if cancelled(cfg) {
             invalidate(&cfg.out);
             return Err(Error::Other("已取消".into()));
         }
-        let fs: Vec<&FilePlan> = plans.iter().filter(|p| &p.domain == &d.name).collect();
+        let fs: Vec<&FilePlan> = plans.iter().filter(|p| p.domain == d.name).collect();
         let t0 = Instant::now();
         let cancel_ref = cfg.cancel.as_deref();
         let job = || run_domain(&tk, &rules, &fs, &d.name, progress, cancel_ref);
@@ -715,39 +789,45 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
             rank_ms = t_rank.elapsed().as_millis();
 
             let t_write = Instant::now();
+            // 作用域就是目录名：`<out>/news/`，与 `<out>/full/` 完全平级
             let w = write_tables(
-                &cfg.out.join("domains").join(&d.name),
-                &format!("domains/{}", d.name),
+                &cfg.out.join(&d.name),
+                &d.name,
                 &words,
                 &chars,
                 word_total,
                 char_total,
-                &word_tiers,
-                &char_tiers,
+                cfg.min_count,
                 cfg.write_tsv,
             )?;
             write_ms = t_write.elapsed().as_millis();
             for t in [w.word, w.ch] {
                 progress(Progress::Table {
-                    table: t.path.clone(),
+                    table: t.key(),
                     entries: t.entries,
                     total_tokens: t.total_tokens,
                     tier_stats: t.tier_stats.clone(),
                 });
                 table_metas.push(t);
             }
+            // 留着当词典外候选词的来源（见上面 `oov_source` 的说明）
+            if cfg.oov_min_count > 0 && oov_source.as_ref().is_none_or(|b| b.len() < words.len()) {
+                oov_source = Some(words);
+            }
         }
 
         log(
             "info",
             format!(
-                "域 {}: {:.2} GB / {} token / {} 词 / {} 字 | 扫描 {:.1}s 排行 {:.1}s 落盘 {:.1}s 归并 {:.1}s",
+                "作用域 {}: {:.2} GB / {} token / {} 词 / {} 字 | 扫描 {:.1}s 排行 {:.1}s 落盘 {:.1}s 归并 {:.1}s",
                 d.name,
                 tot.bytes as f64 / 1e9,
                 tot.tokens,
                 uniq_words,
                 uniq_chars,
-                t0.elapsed().as_secs_f64() - (rank_ms + write_ms) as f64 / 1000.0 - merge_ms as f64 / 1000.0,
+                t0.elapsed().as_secs_f64()
+                    - (rank_ms + write_ms) as f64 / 1000.0
+                    - merge_ms as f64 / 1000.0,
                 rank_ms as f64 / 1000.0,
                 write_ms as f64 / 1000.0,
                 merge_ms as f64 / 1000.0,
@@ -755,57 +835,71 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         );
     }
 
-    // 4) 全库产物。这里同样搬空 overall.words，因此词典外候选词必须**先**从
-    //    排行结果里筛（排行条目里已经带了 in_dict 标记），而不是回头再查计数表。
-    let full_tokens: u64 = overall.words.values().sum();
-    let full_chars = overall.chars.char_total();
-    let t_rank = Instant::now();
-    let full_words = apply_min_count(
-        rank::rank_entries_owned(std::mem::take(&mut overall.words), &|w| tk.flags(w)),
-        cfg.min_count,
-    );
-    let full_char_entries = rank::rank_chars(overall.chars.char_entries());
-    let full_rank_ms = t_rank.elapsed().as_millis();
+    // 4) 全量作用域（默认**不产**，见 [`ScanConfig::write_full`]）。
+    //
+    //    它现在只是一个**验证基准**：一次性全量扫一遍、和各分域相加的结果逐条比对。
+    //    常规工作流是「分域扫成几份产物 → merge 合流 → compose 相加出 full」，
+    //    在那种工作流里每次 scan 都写一遍 full 纯是浪费（而且因为整体覆盖，
+    //    前几次写的会被后一次冲掉）。
+    let oov_entries: Vec<RankedEntry> = if cfg.write_full {
+        let full_tokens: u64 = overall.words.values().sum();
+        let full_chars = overall.chars.char_total();
+        let t_rank = Instant::now();
+        let full_words = apply_min_count(
+            rank::rank_entries_owned(std::mem::take(&mut overall.words), &|w| tk.flags(w)),
+            cfg.min_count,
+        );
+        let full_char_entries = rank::rank_chars(overall.chars.char_entries());
+        let full_rank_ms = t_rank.elapsed().as_millis();
 
-    let t_write = Instant::now();
-    let w = write_tables(
-        &cfg.out.join("full"),
-        "full",
-        &full_words,
-        &full_char_entries,
-        full_tokens,
-        full_chars,
-        &word_tiers,
-        &char_tiers,
-        cfg.write_tsv,
-    )?;
-    let full_write_ms = t_write.elapsed().as_millis();
-    log(
-        "info",
-        format!(
-            "全库表：{} 词 / {} 字 | 排行 {:.1}s 落盘 {:.1}s",
-            full_words.len(),
-            full_char_entries.len(),
-            full_rank_ms as f64 / 1000.0,
-            full_write_ms as f64 / 1000.0
-        ),
-    );
-    for t in [w.word, w.ch] {
-        progress(Progress::Table {
-            table: t.path.clone(),
-            entries: t.entries,
-            total_tokens: t.total_tokens,
-            tier_stats: t.tier_stats.clone(),
-        });
-        table_metas.push(t);
-    }
+        let t_write = Instant::now();
+        let w = write_tables(
+            &cfg.out.join(artifact::SCOPE_FULL),
+            artifact::SCOPE_FULL,
+            &full_words,
+            &full_char_entries,
+            full_tokens,
+            full_chars,
+            cfg.min_count,
+            cfg.write_tsv,
+        )?;
+        let full_write_ms = t_write.elapsed().as_millis();
+        log(
+            "info",
+            format!(
+                "全量作用域（full）：{} 词 / {} 字 | 排行 {:.1}s 落盘 {:.1}s",
+                full_words.len(),
+                full_char_entries.len(),
+                full_rank_ms as f64 / 1000.0,
+                full_write_ms as f64 / 1000.0
+            ),
+        );
+        for t in [w.word, w.ch] {
+            progress(Progress::Table {
+                table: t.key(),
+                entries: t.entries,
+                total_tokens: t.total_tokens,
+                tier_stats: t.tier_stats.clone(),
+            });
+            table_metas.push(t);
+        }
+        full_words
+    } else {
+        log(
+            "info",
+            "按默认口径跳过全量作用域 full：它由「合流各分域产物 + 把作用域相加」得到\
+             （`vocfreq merge` 然后 `vocfreq compose --scope full`）"
+                .to_string(),
+        );
+        oov_source.take().unwrap_or_default()
+    };
 
     // 5) 词典外候选词（关闭 HMM 时它们会被切成碎片，回填 user-dict 后即可成词）
     //
     // 必须限定「含汉字」：论坛语料里的 HTML 与 URL 会切出 https / com / www / chksm
     // 这类 ASCII 碎片，它们的频次极高，不加过滤会把整张候选榜淹掉，真正有价值的
     // 中文新词一个都露不出来。
-    let cands: Vec<(Box<str>, u64)> = full_words
+    let cands: Vec<(Box<str>, u64)> = oov_entries
         .iter()
         .filter(|e| {
             e.count >= cfg.oov_min_count
@@ -824,7 +918,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
     // 6) meta.json
     let elapsed_ms = t_start.elapsed().as_millis() as u64;
     let meta = Meta {
-        schema_version: 1,
+        schema_version: SCHEMA_VERSION,
         generated_at: artifact::iso8601_now(),
         tool_version: VERSION.to_string(),
         corpus_root: cfg.corpus.display().to_string(),
@@ -833,8 +927,10 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
             engine: "jieba-rs".into(),
             version: "0.11".into(),
             hmm: cfg.tok.hmm,
-            dict: tk.dict_label.clone(),
-            user_dict: user_dict_label,
+            dicts: tk.dicts.clone(),
+            // v1 的两个兼容字段只读不写
+            legacy_dict: None,
+            legacy_user_dict: None,
             min_len: cfg.tok.min_len,
             max_len: cfg.tok.max_len,
             keep_latin: cfg.tok.keep_latin,
@@ -842,9 +938,10 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
             skip_single_char: cfg.tok.skip_single_char,
         },
         totals: overall_totals,
-        domains: domain_metas,
+        domains: scope_metas,
         tables: table_metas,
         tier_names: rank::TIER_NAMES.iter().map(|s| s.to_string()).collect(),
+        tier_keys: rank::TIER_KEYS.iter().map(|s| s.to_string()).collect(),
     };
     artifact::write_meta(&cfg.out.join("meta.json"), &meta)?;
 
@@ -933,8 +1030,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_skip_domain_tables_without_full() {
+        // 「不要分域表 + 不要 full」= 一张表都没有。必须在动手扫描前就报错，
+        // 而不是产出一份 `Dataset::open` 打不开的废目录。
+        let out = std::env::temp_dir().join(format!("vocfreq_scan_reject_{}", std::process::id()));
+        let mut cfg = ScanConfig::new("corpus-不存在也无所谓", &out);
+        cfg.skip_domain_tables = true;
+        cfg.write_full = false;
+        let e = scan(&cfg, &|_| {}).expect_err("这种组合必须被拒绝");
+        assert!(e.to_string().contains("配置矛盾"), "{e}");
+    }
+
+    #[test]
     fn chunks_cover_whole_file_without_gaps() {
-        let plans = vec![FilePlan {
+        let plans = [FilePlan {
             path: PathBuf::from("x.jsonl"),
             domain: "d".into(),
             bytes: 100 * 1024 * 1024 + 7,
@@ -951,7 +1060,13 @@ mod tests {
 
     #[test]
     fn find_bytes_locates_anchor() {
-        assert_eq!(find_bytes(r#"{"段落":[{"内容":"x"}]}"#.as_bytes(), r#""段落""#.as_bytes()), Some(1));
+        assert_eq!(
+            find_bytes(
+                r#"{"段落":[{"内容":"x"}]}"#.as_bytes(),
+                r#""段落""#.as_bytes()
+            ),
+            Some(1)
+        );
         assert_eq!(find_bytes(b"abc", b"zz"), None);
     }
 }
