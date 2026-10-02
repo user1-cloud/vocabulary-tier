@@ -1,0 +1,49 @@
+[package]
+name = "voctier-desktop"
+version = "0.1.0"
+description = "VocTier 字词频率分析 桌面端"
+authors = ["VocTier"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+# ⚠️ 重要：这是一个「独立 workspace」。
+#
+# 上层目录（<仓库根>\Cargo.toml）是一个 Cargo workspace（members 只包含
+# crates/vocfreq-core 和 crates/vocfreq-cli）。Cargo 会向上查找 workspace 根，
+# 如果不加这个空的 [workspace] 表，会报 "current package believes it's in a
+# workspace when it's not" 或者被强行拉进上层 workspace。
+[workspace]
+
+[lib]
+name = "voctier_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1"
+
+# 统计引擎。Tauri 侧与分析/查询共用同一个 core crate，
+# 因此「命令行工具」与「桌面端」产出的结果与分词粒度必然一致。
+vocfreq-core = { path = "../../../crates/vocfreq-core" }
+
+# 全局取词：剪贴板暂存与还原
+arboard = "3"
+
+[target.'cfg(windows)'.dependencies]
+# 模拟 Ctrl+C。只用到 SendInput 与 GetClipboardSequenceNumber，
+# 不引入整个 windows crate。
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

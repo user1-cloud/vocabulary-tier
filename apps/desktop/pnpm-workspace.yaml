@@ -1,0 +1,10 @@
+# pnpm 12 的配置文件（pnpm 12 起，pnpm 相关设置从 package.json 的 "pnpm" 字段
+# 迁移到了这里；写 package.json 会得到 WARN 并被忽略）。
+#
+# 背景：pnpm 10+ 默认拦截依赖的 postinstall 脚本。esbuild 需要跑安装脚本才能
+# 准备好原生二进制，否则 vite build 会报 "You installed esbuild for another
+# platform" / 找不到 esbuild 可执行文件。
+#
+# 这里显式放行，等价于非交互地执行了 `pnpm approve-builds`。
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,24 @@
+# 换行统一交给 git 决定，避免 Windows 上满屏 "LF will be replaced by CRLF" 警告，
+# 也避免跨平台协作时把整文件当成改动。
+* text=auto
+
+# 二进制文件：不要做换行转换，也不要尝试文本 diff
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.svg  text
+*.exe  binary
+*.dll  binary
+*.lib  binary
+*.a    binary
+
+# 词频表产物（正常被 .gitignore 排除，这里再兜一层）
+*.vfr  binary
+
+# Windows 批处理/PowerShell 保持 CRLF 更稳妥
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
