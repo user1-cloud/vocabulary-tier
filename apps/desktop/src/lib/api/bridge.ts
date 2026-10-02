@@ -41,8 +41,24 @@ export function isTauri(): boolean {
 export const SCAN_PROGRESS_EVENT = 'scan:progress';
 export const SCAN_DONE_EVENT = 'scan:done';
 export const SCAN_ERROR_EVENT = 'scan:error';
-/** 悬浮小窗 → 主窗口的文本回传事件（Rust 侧无需改动：走 Tauri 自带事件总线） */
-export const POPUP_TEXT_EVENT = 'voctier:popup-text';
+/**
+ * 后端 → 悬浮小窗 的「待分析文本」推送事件（payload = 纯字符串，已冻结）。
+ *
+ * 小窗关闭时只是隐藏而不是销毁，JS 只在第一次挂载时跑一次；所以每次显示小窗
+ * 后由 Rust 侧（`show_popup()` 里的 `emit_to(POPUP_LABEL, "popup:text", text)`）
+ * 主动把文本推给小窗，不能只靠小窗自己 `take_pending_selection`。
+ * 空串 = 当前没有选中内容，小窗应显示空输入框等用户手输。
+ */
+export const POPUP_TEXT_EVENT = 'popup:text';
+
+/**
+ * 悬浮小窗 → 主窗口 的文本回传事件（小窗里的「发回主窗口」按钮）。
+ *
+ * 与 `POPUP_TEXT_EVENT` 方向相反、事件名也不同，别混淆：冻结接口里没有
+ * 「发回主窗口」的命令，而 `open_popup` 的语义是「打开小窗并填入文本」，
+ * 用它等于自己给自己发，所以这一路走 Tauri 自带的事件总线广播。
+ */
+export const POPUP_REPLY_EVENT = 'voctier:popup-text';
 
 const NO_TAURI_HINT = '当前不在桌面端运行，这个功能需要 VocTier 桌面应用。';
 
@@ -395,18 +411,35 @@ export async function takePendingSelection(): Promise<Result<string>> {
 }
 
 /**
- * 小窗 → 主窗口的文本回传。
+ * 订阅后端在**每次显示小窗后**推送的待分析文本（`popup:text`）。
  *
- * 冻结接口里没有「发回主窗口」的命令，而 `open_popup` 的语义是
- * 「打开小窗并填入文本」，用它会自己给自己发。所以这里用 Tauri 自带的
- * 事件总线广播 `voctier:popup-text`，主窗口 `listen` 同一事件即可，
- * Rust 侧不需要新增任何命令。
+ * 返回值是 `Promise<UnlistenFn>`：`listen` 本身是异步的，组件必须在卸载时调用
+ * 拿到的 unlisten 才会真正解绑。组件里的标准写法（注意 `disposed` 竞态）：
+ *
+ *   $effect(() => {
+ *     let disposed = false;
+ *     let unlisten: (() => void) | null = null;
+ *     void onPopupText(apply).then((off) => (disposed ? off() : (unlisten = off)));
+ *     return () => { disposed = true; unlisten?.(); };
+ *   });
+ *
+ * 浏览器预览（`isTauri() === false`）下返回一个空操作的 unlisten，保证 UI 能跑。
  */
-export async function emitPopupText(text: string): Promise<Result<null>> {
+export async function onPopupText(cb: (text: string) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>(POPUP_TEXT_EVENT, (event) =>
+    cb(typeof event.payload === 'string' ? event.payload : '')
+  );
+}
+
+/**
+ * 小窗 → 主窗口的文本回传（见 `POPUP_REPLY_EVENT`）。
+ */
+export async function emitPopupReply(text: string): Promise<Result<null>> {
   if (!isTauri()) return { ok: false, error: '浏览器预览模式下没有主窗口可回传。' };
   try {
     const { emit } = await import('@tauri-apps/api/event');
-    await emit(POPUP_TEXT_EVENT, { text });
+    await emit(POPUP_REPLY_EVENT, { text });
     return { ok: true, data: null };
   } catch (error) {
     return { ok: false, error: toMessage(error) };
@@ -414,9 +447,9 @@ export async function emitPopupText(text: string): Promise<Result<null>> {
 }
 
 /** 主窗口订阅小窗回传的文本 */
-export function onPopupText(handler: (text: string) => void): () => void {
+export function onPopupReply(handler: (text: string) => void): () => void {
   if (!isTauri()) return () => {};
-  return bridgeListen<{ text: string }>(POPUP_TEXT_EVENT, (payload) => handler(payload?.text ?? ''));
+  return bridgeListen<{ text: string }>(POPUP_REPLY_EVENT, (payload) => handler(payload?.text ?? ''));
 }
 
 // ---------------------------------------------------------------------------

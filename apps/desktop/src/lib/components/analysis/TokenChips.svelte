@@ -32,6 +32,13 @@ type Props = {
   settings?: Settings | null;
   /** 覆盖率曲线缓存（`tierMethod = 'coverage'` 时需要） */
   curves?: Record<string, TierCurve>;
+  /**
+   * 额外高亮某一个 token（下标）。
+   *
+   * 用于「固定位置详情面板」：鼠标移开后详情还留在面板里，靠这个高亮让用户
+   * 知道面板里是哪个词。不传 = 只有原有的 hover 描边，行为与以前完全一致。
+   */
+  activeIndex?: number | null;
   class?: string;
 };
 
@@ -43,6 +50,7 @@ let {
   meta = null,
   settings = null,
   curves,
+  activeIndex = null,
   class: className = '',
 }: Props = $props();
 
@@ -111,6 +119,7 @@ function titleOf(token: TokenInfo): string {
         class={cn(
           'cursor-pointer rounded-[3px] px-[2px] py-px text-left transition-shadow hover:ring-1 hover:ring-ring',
           compact ? 'text-[13px]' : 'text-[15px]',
+          index === activeIndex && 'ring-2 ring-primary ring-offset-1 ring-offset-background',
           token.single_cjk && 'shadow-[inset_0_-1px_0_0_currentColor]'
         )}
         style={styleFor(token)}
@@ -130,6 +139,7 @@ function titleOf(token: TokenInfo): string {
           compact ? 'text-[13px]' : 'text-[15px]',
           token.accepted && 'cursor-help',
           onHover && 'hover:ring-1 hover:ring-ring/50',
+          index === activeIndex && 'ring-2 ring-primary ring-offset-1 ring-offset-background',
           token.single_cjk && 'shadow-[inset_0_-1px_0_0_currentColor]'
         )}
         style={styleFor(token)}

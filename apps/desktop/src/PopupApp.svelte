@@ -4,30 +4,44 @@
    *
    * 无边框窗口，结构：
    *   顶部：可拖拽条（data-tauri-drag-region）+ 操作按钮
-   *   中部：输入框（启动时用 take_pending_selection 填入取到的文本）
-   *   下部：着色卡片（与划句分析页同一套渲染，紧凑模式）
+   *   中部：输入框
+   *   下部：上半 = 着色 token 卡片（可滚动），下半 = **固定位置的词条详情区**（固定高度、独立滚动）
    *
-   * 「发回主窗口」：冻结接口里没有对应命令，`open_popup` 的语义是
-   * 「打开小窗并填入文本」，用它等于自己给自己发。因此这里走 Tauri 自带的
-   * 事件总线广播 `voctier:popup-text`（见 bridge.ts 的 emitPopupText），
-   * 主窗口在 App.svelte 里 listen 同一事件即可，Rust 侧无需新增命令。
+   * 为什么详情是固定区域而不是跟随鼠标的浮层：小窗只有 ~460×340，浮层一靠近
+   * 窗口边缘就被裁掉，读不全。固定区域永远在窗口内，内容多了自己滚。
+   *
+   * 文本从哪来（两条路都走，互不覆盖）：
+   *   1. 挂载时 `take_pending_selection()` 取一次（第一次打开小窗时用）；
+   *   2. 之后只认后端推送的 `popup:text` 事件（`onPopupText`）——
+   *      小窗关闭时只是隐藏、不销毁，JS 不会重新挂载，靠事件才能拿到第二次的文本。
+   *
+   * 「发回主窗口」按钮：走 Tauri 自带事件总线广播 `voctier:popup-text`
+   * （见 bridge.ts 的 emitPopupReply），主窗口在 App.svelte 里 listen 同一事件。
    */
   import TokenChips from '$lib/components/analysis/TokenChips.svelte';
-  import TokenTip from '$lib/components/analysis/TokenTip.svelte';
+  import TokenDetail from '$lib/components/analysis/TokenDetail.svelte';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
   import {
     analyzeText,
     copyText,
     datasetStatus,
-    emitPopupText,
+    emitPopupReply,
     getSettings,
     isTauri,
+    onPopupText,
     openDataset,
     takePendingSelection,
   } from '$lib/api/bridge';
   import { findTable } from '$lib/format';
   import { cn } from '$lib/utils';
-  import { activeBounds, activeTierIndex, appSettings, tierNameAt, tierNamesOf } from '$lib/tiers.svelte';
+  import {
+    activeBounds,
+    activeTierIndex,
+    appSettings,
+    tierCurves,
+    tierNameAt,
+    tierNamesOf,
+  } from '$lib/tiers.svelte';
   import { summarizeTokens } from '$lib/segments';
   import type { Meta, Settings, TokenInfo } from '$lib/types';
 
@@ -40,21 +54,38 @@
   let error = $state('');
   let notice = $state('');
 
-  let hovered = $state<TokenInfo | null>(null);
-  let tipPos = $state({ x: 0, y: 0 });
-  let wrapper = $state<HTMLDivElement | null>(null);
+  /**
+   * 详情区里显示的 token —— 用**下标**记住，而不是 token 对象：
+   * 重新分析会整批换掉 token 对象，用下标才能在结果刷新后继续指向同一个位置。
+   * 鼠标移开时**不清空**（否则鼠标移向详情区去读的时候会闪没）。
+   */
+  let activeIndex = $state<number | null>(null);
+  /** 钉住：点击某个 token 后，悬停别的词不再改变详情区 */
+  let pinnedIndex = $state<number | null>(null);
 
   let requestSeq = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** 挂载时的 `take_pending_selection()` 是否已经返回（用于与事件解竞态） */
+  let mountTakeDone = false;
+  /** 用户是否手输过（手输过就不再让挂载取词覆盖） */
+  let userEdited = false;
+  /**
+   * 「立刻重新分析」的标记（**普通变量**，不是 $state）：
+   * 事件推来的文本会直接跑一次 analyze，这里记下来让防抖那一路跳过同一个值，
+   * 避免同一次文本变化发两份请求。
+   */
+  let immediate: { value: string; ready: boolean } | null = null;
+
   const summary = $derived(summarizeTokens(tokens, tierNameOfToken));
   const wordBounds = $derived(meta ? activeBounds('word', meta) : []);
-  const charBounds = $derived(meta ? activeBounds('char', meta) : []);
   const tierNames = $derived(tierNamesOf(meta));
-  const tipIsChar = $derived(hovered?.single_cjk === true || hovered?.table === 'char');
-  const tipBounds = $derived(tipIsChar ? charBounds : wordBounds);
   const hasTable = $derived(meta !== null);
+
+  /** 当前详情区展示哪一条：钉住的优先，其次最后一次悬停的 */
+  const shownIndex = $derived(pinnedIndex ?? activeIndex);
+  const shownToken = $derived(shownIndex === null ? null : (tokens[shownIndex] ?? null));
 
   // 分组阈值只影响「着色与图例」，不影响查频次是否成功；有设置就用设置
   const settings = $derived(settingsState ?? appSettings.value);
@@ -63,7 +94,12 @@
   function tierNameOfToken(token: TokenInfo): string | null {
     if (!meta) return token.tier_name;
     const isChar = token.single_cjk || token.table === 'char';
-    const index = activeTierIndex(isChar ? 'char' : 'word', token.rank, meta, isChar ? 'full/char' : 'full/word');
+    const index = activeTierIndex(
+      isChar ? 'char' : 'word',
+      token.rank,
+      meta,
+      isChar ? 'full/char' : 'full/word'
+    );
     return tierNameAt(index, tierNames) ?? token.tier_name;
   }
 
@@ -73,11 +109,25 @@
     void bootstrap();
   });
 
-  // 文本变化（含手输）→ 重新分析
+  // 文本变化（手输或事件推来）→ 重新分析
   $effect(() => {
     const value = text;
     const ready = hasTable;
     return schedule(value, ready);
+  });
+
+  // 订阅后端的 `popup:text` 推送；组件卸载时 unlisten
+  $effect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onPopupText((next) => applyPopupText(next)).then((off) => {
+      if (disposed) off();
+      else unlisten = off;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
 
   async function bootstrap() {
@@ -106,13 +156,51 @@
       meta = null;
     }
 
+    // 第一次打开小窗时，事件与挂载取词存在竞态：
+    //   - 先收到事件（可能是空串）→ applyPopupText 已经把文本放进去了，这里不再覆盖；
+    //   - 事件还没到（或先到的空串把框留空）→ 用挂载取到的文本兜底。
+    // 只在「输入框还空着 + 用户没手输过」时兜底，避免把事件推来的内容擦掉。
     const pending = await takePendingSelection();
-    if (pending.ok && pending.data.trim()) text = pending.data;
+    mountTakeDone = true;
+    if (pending.ok && pending.data.trim() && !userEdited && text === '') {
+      text = pending.data;
+    }
 
     loading = false;
   }
 
+  /**
+   * 收到后端推送的待分析文本。
+   *
+   *   - 与当前输入框内容相同 → 直接返回（不重复触发分析）；
+   *   - 空串 → 清空输入框（= 「当前没有选中内容，请手输」）；
+   *   - 非空 → 填进输入框并**立刻**分析一次（不等防抖）。
+   */
+  function applyPopupText(next: string) {
+    const value = typeof next === 'string' ? next : '';
+    if (value === text) return;
+    // 挂载取词还没回来时，空事件先不处理：它可能只是「取词前」的占位，
+    // 若是竞态导致事件先到，紧接着挂载那一路就会把真正的文本填进来。
+    if (value === '' && !mountTakeDone) return;
+
+    text = value;
+    if (value === '') {
+      tokens = [];
+      activeIndex = null;
+      pinnedIndex = null;
+      return;
+    }
+
+    immediate = { value, ready: hasTable };
+    void run(value, hasTable);
+  }
+
   function schedule(value: string, ready: boolean) {
+    // 事件推来的文本已经立刻分析过，这里跳过同一个值，避免重复请求
+    if (immediate !== null && immediate.value === value && immediate.ready === ready) {
+      immediate = null;
+      return;
+    }
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
@@ -145,16 +233,34 @@
 
   // ---------------------------------------------------------------- 交互
 
-  function onHover(token: TokenInfo | null, event: MouseEvent | null) {
-    if (!token || !event || !wrapper) {
-      hovered = null;
-      return;
-    }
-    const rect = wrapper.getBoundingClientRect();
-    const x = Math.min(Math.max(4, event.clientX - rect.left), Math.max(4, rect.width - 240));
-    const y = event.clientY - rect.top;
-    tipPos = { x, y: Math.max(4, y) };
-    hovered = token;
+  /**
+   * token 在结果数组里的下标。
+   *
+   * 不直接用 `tokens.indexOf(token)`：`$state` 数组是深层代理，交给组件的
+   * token 与数组里的元素是同一份代理，但下标比较走「位置 + 文本」更稳
+   * （代理身份比较在不同渲染路径下不保证相等）。
+   */
+  function indexOfToken(token: TokenInfo): number {
+    return tokens.findIndex(
+      (item) =>
+        item === token || (item.byte_start === token.byte_start && item.text === token.text)
+    );
+  }
+
+  /** 悬停：更新详情区；`token === null`（鼠标移开）时**保留**最后一次的详情 */
+  function onHover(token: TokenInfo | null) {
+    if (!token) return;
+    const index = indexOfToken(token);
+    if (index < 0) return;
+    activeIndex = index;
+  }
+
+  /** 点击钉住 / 取消钉住（钉住后悬停别的词不改变详情区） */
+  function onPick(token: TokenInfo) {
+    const index = indexOfToken(token);
+    if (index < 0) return;
+    pinnedIndex = pinnedIndex === index ? null : index;
+    activeIndex = index;
   }
 
   function flash(message: string) {
@@ -178,7 +284,7 @@
       flash('没有可回传的内容');
       return;
     }
-    const res = await emitPopupText(text);
+    const res = await emitPopupReply(text);
     flash(res.ok ? '已发送到主窗口' : res.error);
   }
 
@@ -198,9 +304,11 @@
     }
   }
 
-  async function clearText() {
+  function clearText() {
     text = '';
     tokens = [];
+    activeIndex = null;
+    pinnedIndex = null;
   }
 </script>
 
@@ -261,6 +369,7 @@
   <div class="flex shrink-0 items-center gap-1.5 border-b border-border px-2 py-1.5">
     <textarea
       bind:value={text}
+      oninput={() => (userEdited = true)}
       rows="2"
       spellcheck="false"
       placeholder="粘贴或输入要查词的中文…"
@@ -282,7 +391,7 @@
     {/if}
   </div>
 
-  <!-- 着色卡片 -->
+  <!-- 着色 token 卡片（上半，自己滚动） -->
   <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
     {#if loading}
       <p class="py-6 text-center text-[11px] text-muted-foreground">正在载入词频表…</p>
@@ -302,28 +411,16 @@
         </p>
       {/if}
 
-      <div
-        bind:this={wrapper}
-        class="relative"
-        style="opacity: {settings ? Math.min(1, Math.max(0.3, settings.popupOpacity || 1)) : 1}"
-      >
-        <TokenChips {tokens} compact onHover={onHover} {meta} {settings} />
-
-        {#if hovered}
-          <div
-            class="pointer-events-none absolute z-40 w-60"
-            style="left:{tipPos.x}px;top:{tipPos.y}px;transform:translateY(12px)"
-          >
-            <TokenTip
-              token={hovered}
-              name={tierNameOfToken(hovered)}
-              bounds={tipBounds}
-              names={tierNames}
-              class="text-[11px]"
-            />
-          </div>
-        {/if}
-      </div>
+      <TokenChips
+        {tokens}
+        compact
+        {meta}
+        {settings}
+        curves={tierCurves}
+        activeIndex={shownIndex}
+        onHover={(token) => onHover(token)}
+        onPick={(token) => onPick(token)}
+      />
 
       <div class="mt-3 border-t border-border pt-2">
         <TierLegend
@@ -341,4 +438,36 @@
       </p>
     {/if}
   </div>
+
+  <!-- 词条详情：固定位置 + 固定高度，内容多了在区域内滚动，永远不会被窗口边缘裁掉 -->
+  <section
+    class="flex h-[124px] shrink-0 flex-col border-t border-border bg-surface-muted/40"
+    data-testid="popup-token-detail"
+    aria-label="词条详情"
+  >
+    <div class="flex shrink-0 items-center gap-2 px-2.5 pt-1.5">
+      <span class="text-[10px] font-medium text-muted-foreground">词条详情</span>
+      {#if pinnedIndex !== null}
+        <button
+          type="button"
+          class="rounded px-1 text-[10px] text-primary hover:bg-accent"
+          onclick={() => (pinnedIndex = null)}
+        >
+          取消钉住
+        </button>
+      {/if}
+      <span class="ml-auto text-[10px] text-muted-foreground">点词条可钉住</span>
+    </div>
+    <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-1.5">
+      <TokenDetail
+        token={shownToken}
+        {meta}
+        {settings}
+        curves={tierCurves}
+        compact
+        pinned={pinnedIndex !== null}
+        emptyHint="悬停上方任意词条，这里固定显示它的频次、排名与分组详情。"
+      />
+    </div>
+  </section>
 </div>

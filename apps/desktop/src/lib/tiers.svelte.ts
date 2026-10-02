@@ -4,7 +4,7 @@
  * 为什么要有这个模块：
  *   - 分组自定义（tierMethod / tierWordBounds / tierCharBounds / tierCoverage）与
  *     表开关（enabledTables）都在设置里，但**渲染分组的地方有三个页面 + 两个组件**
- *     （划句分析、排行榜、悬浮小窗、TokenChips、TokenTip、TierLegend）。
+ *     （划句分析、排行榜、悬浮小窗、TokenChips、TokenDetail、TierLegend）。
  *     每个页面各拉一次 `get_settings` 会持有各自的一份副本，改完一处别处不刷新。
  *   - 所以设置只在这里存一份：App.svelte 启动时 `loadTierSettings()` 一次，
  *     「表管理」页改完直接写这份 state，其它页面因为读了同一份响应式状态会自动重算。

@@ -221,6 +221,11 @@ struct AppState {
     /// 小窗必须复用同一个：WebView2 的数据目录是**按环境**的，主窗口回退到备用目录后，
     /// 小窗若仍用默认目录就会创建失败——表现为「按了热键但什么都没出来」。
     webview_data_dir: Mutex<Option<Option<PathBuf>>>,
+    /// 小窗弹出**之前**用户正在用的窗口句柄，关闭小窗时把焦点还回去。
+    ///
+    /// 不还的话焦点可能落到本应用主窗口上，于是用户下次划词时 `Ctrl+C`
+    /// 会被发到我们自己这里，复制不到选中内容 —— 症状就是「小窗是空的」。
+    prev_foreground: Mutex<isize>,
 }
 
 impl AppState {
@@ -738,11 +743,16 @@ async fn capture_selection(state: State<'_, AppState>) -> Result<String, String>
 
 #[tauri::command]
 fn take_pending_selection(state: State<'_, AppState>) -> String {
-    state
+    let text = state
         .pending
         .lock()
         .map(|mut g| std::mem::take(&mut *g))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    log_line(
+        "startup.log",
+        &format!("[小窗] 挂载时取走待分析文本 {} 字符", text.chars().count()),
+    );
+    text
 }
 
 #[tauri::command]
@@ -804,6 +814,23 @@ fn show_popup(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
     };
     let _ = win.set_always_on_top(s.popup_always_on_top);
 
+    // 记下「小窗出现之前用户正在用的窗口」，关闭时要把焦点还给它。
+    // 只在这次是「从隐藏变为显示」时记录；如果小窗本来就开着且是前台，
+    // 记下来的就成了我们自己的窗口，还回去反而更糟。
+    if !win.is_visible().unwrap_or(false) {
+        let cur = capture::foreground_hwnd();
+        let mine = app
+            .webview_windows()
+            .values()
+            .any(|w| w.hwnd().map(|h| h.0 as isize == cur).unwrap_or(false));
+        if cur != 0 && !mine {
+            if let Ok(mut g) = app.state::<AppState>().prev_foreground.lock() {
+                *g = cur;
+            }
+            log_line("startup.log", &format!("[小窗] 记住原前台窗口 hwnd={cur}"));
+        }
+    }
+
     // 放在光标右下方；越界时退回主屏居中，宁可位置不完美也不要跑到屏幕外
     if let Ok(pos) = app.cursor_position() {
         let x = pos.x + 14.0;
@@ -827,14 +854,49 @@ fn show_popup(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
     }
     win.show().map_err(|e| format!("显示小窗失败：{e}"))?;
     let _ = win.set_focus();
+
+    // 关键：把待分析文本**推**给小窗，而不是等它自己来取。
+    //
+    // 小窗关闭时只是隐藏（不销毁），因此它的 JS 只在**第一次**挂载时跑一次。
+    // 若只靠 `take_pending_selection`，第二次按热键时小窗不会重新挂载，
+    // 于是显示的是上一次的旧内容（取过一次后就是空的了）。
+    let text = app
+        .state::<AppState>()
+        .pending
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    log_line(
+        "startup.log",
+        &format!("[小窗] 推送待分析文本 {} 字符", text.chars().count()),
+    );
+    let _ = app.emit_to(POPUP_LABEL, "popup:text", text);
     Ok(())
+}
+
+/// 隐藏小窗，并把焦点**还给用户原来在用的窗口**。
+///
+/// 为什么必须还：如果不还，焦点会落到本应用自己的主窗口（或无处可去）。
+/// 那么用户下一次划词按热键时，`Ctrl+C` 就被发到了我们自己的窗口上，
+/// 复制不到任何选中内容 —— 表现出来就是「小窗弹出来了但是空的」。
+fn hide_popup_now(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window(POPUP_LABEL) {
+        let _ = w.hide();
+    }
+    let prev = app
+        .state::<AppState>()
+        .prev_foreground
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(0);
+    if prev != 0 {
+        capture::set_foreground(prev);
+    }
 }
 
 #[tauri::command]
 fn hide_popup(app: tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window(POPUP_LABEL) {
-        let _ = w.hide();
-    }
+    hide_popup_now(&app);
 }
 
 /// 注册（或重新注册）全局热键。
@@ -854,15 +916,26 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         let h = handle.clone();
         std::thread::spawn(move || {
             let text = capture::capture_selection(420).unwrap_or_default();
+            log_line(
+                "startup.log",
+                &format!("[热键] 取词得到 {} 字符", text.chars().count()),
+            );
             {
                 let st = h.state::<AppState>();
-                if !text.is_empty() {
-                    if let Ok(mut g) = st.pending.lock() {
+                // 先把 lock() 的结果绑定成局部变量再 match。
+                // 直接写 `if let Ok(mut g) = st.pending.lock()` 会让那个临时
+                // `Result<MutexGuard, PoisonError<..>>` 活到代码块结束，
+                // 而 `st` 更早被 drop —— 借用检查会报 E0597。
+                // 绑成局部后 drop 顺序是 g → locked → st，就没问题了。
+                let locked = st.pending.lock();
+                if let Ok(mut g) = locked {
+                    // 没取到就清空：让小窗显示空输入框等用户手输，
+                    // 而不是把上一次的旧内容又弹一遍。
+                    if text.is_empty() {
+                        g.clear();
+                    } else {
                         *g = text;
                     }
-                } else if let Ok(mut g) = st.pending.lock() {
-                    // 没有选区也要弹空输入框，方便手输
-                    g.clear();
                 }
             }
             let settings = h.state::<AppState>().settings_snapshot();
@@ -1206,11 +1279,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 用户点小窗的关闭按钮时隐藏而不是销毁
+            // 用户点小窗的关闭按钮时隐藏而不是销毁，并把焦点还回去
             if window.label() == POPUP_LABEL {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
+                    hide_popup_now(window.app_handle());
                 }
             }
         })

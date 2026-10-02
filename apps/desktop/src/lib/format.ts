@@ -159,7 +159,7 @@ export function tierIndexOfRank(
 //
 // 后端返回的 `token.tier` / `word_hit.tier` 一律按 meta 里的默认阈值算，
 // 用户自定义阈值只在设置里。所以「这个排名属于第几组」必须由这里统一回答，
-// 所有渲染分组的地方（TokenChips / TokenTip / TierLegend / 排行榜）都走
+// 所有渲染分组的地方（TokenChips / TokenDetail / TierLegend / 排行榜）都走
 // `tierIndexFor`，不要再去读 token.tier。
 //
 // 用户的「启用表」设置只影响分域对比与排行榜（后端 analyze_text 里过滤），

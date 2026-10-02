@@ -17,7 +17,7 @@
     type RouteId,
   } from '$lib/navigation';
   import { initTheme } from '$lib/theme.svelte';
-  import { onPopupText } from '$lib/api/bridge';
+  import { onPopupReply } from '$lib/api/bridge';
   import { loadTierSettings } from '$lib/tiers.svelte';
 
   import WordFreqPage from './routes/WordFreqPage.svelte';
@@ -87,7 +87,7 @@
     window.addEventListener(NAVIGATE_EVENT, onNavigate);
     window.addEventListener(ANALYZE_WORD_EVENT, onAnalyzeWord);
     // 悬浮小窗通过 Tauri 事件总线回传文本（浏览器里是 no-op）
-    const offPopup = onPopupText(onPopup);
+    const offPopup = onPopupReply(onPopup);
 
     return () => {
       window.removeEventListener(NAVIGATE_EVENT, onNavigate);
