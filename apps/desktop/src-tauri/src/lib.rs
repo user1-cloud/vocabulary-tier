@@ -939,7 +939,7 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         }
         // 取词会阻塞几百毫秒（等目标程序写剪贴板），绝不能占着热键回调线程
         let h = handle.clone();
-        std::thread::spawn(move || {
+        let run_capture = move || {
             let (text, reason) = match capture::capture_selection(420) {
                 Ok(c) => (c.text, c.reason),
                 Err(e) => (String::new(), format!("取词失败：{e}")),
@@ -987,7 +987,17 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
                 log_line("crash.log", &format!("全局热键弹出小窗失败：{e}"));
                 let _ = h.emit("scan:error", e);
             }
-        });
+        };
+        // 【诊断开关】VOCTIER_INJECT_INLINE=1 时在主线程上直接取词。
+        // 用来判别「合成输入被丢弃」是否与调用线程有关——
+        // 后台线程没有消息队列，而主线程是在事件循环里的 UI 线程。
+        // 代价是这期间界面会卡住约半秒，所以只在诊断时开。
+        if std::env::var_os("VOCTIER_INJECT_INLINE").is_some() {
+            log_line("startup.log", "[诊断] 在主线程上直接取词（VOCTIER_INJECT_INLINE）");
+            run_capture();
+        } else {
+            std::thread::spawn(run_capture);
+        }
     })
     .map_err(|e| e.to_string())
 }

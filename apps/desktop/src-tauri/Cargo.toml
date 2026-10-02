@@ -47,3 +47,19 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# UI Automation：**直接读取**焦点元素的选中文本，不合成任何按键。
+#
+# 为什么需要它：`SendInput` 注入的 Ctrl+C 在某些环境里会被**静默丢弃**——
+# SendInput 照样返回成功、前台窗口和修饰键状态都正常、剪贴板却毫无变化。
+# 实测在同一台机器上，pwsh 进程注入同样的事件有效，而本应用注入完全无效，
+# 且与调用线程（主线程/后台线程）、启动方式（会话内/资源管理器）都无关，
+# 具体机制未能查明。UIA 走的是跨进程 COM 读取，与合成输入是完全不同的通路，
+# 因此不受该问题影响；顺带还避免了「污染用户剪贴板」这个副作用。
+#
+# 注：windows-sys 不含 UIA 绑定（更不含 COM 智能指针），所以只能用 windows crate。
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Accessibility",
+] }

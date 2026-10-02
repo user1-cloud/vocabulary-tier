@@ -1,12 +1,18 @@
-//! 全局取词：**剪贴板模拟法**。
+//! 全局取词。两条路，**优先 UI Automation，失败再用剪贴板模拟法**。
 //!
-//! 流程：暂存剪贴板 → 模拟 Ctrl+C → 等剪贴板序列号变化 → 读走选区 → 立刻还原。
+//! 1. **UIA（首选）**：读焦点元素的 TextPattern 选区。不合成按键、不碰剪贴板，
+//!    因此没有焦点/修饰键/UIPI/剪贴板占用这一整类问题。
+//! 2. **剪贴板模拟法（兜底）**：暂存剪贴板 → 模拟 Ctrl+C → 等序列号变化 → 读走 → 还原。
+//!    在 UIA 拿不到文本时用（老旧程序、自绘控件、部分终端不支持 TextPattern）。
 //!
-//! 为什么不用 UI Automation：UIA 的 TextPattern 只对支持它的程序有效（老旧程序、
-//! 游戏、部分 PDF 阅读器拿不到文本），而剪贴板法在浏览器 / Office / PDF 阅读器里
-//! 通吃。代价有两个，都已知且可接受：
-//!  1. 会短暂占用剪贴板，因此必须尽快还原；
-//!  2. 若原剪贴板内容不是文本（图片、文件），`arboard` 无法完整还原，此时我们会
+//! 为什么必须加第 1 条：实测 `SendInput` 注入的 Ctrl+C 在某些环境里会被**静默丢弃**
+//! —— SendInput 返回成功、前台窗口与修饰键状态都正常，剪贴板却毫无变化；同一台机器上
+//! pwsh 注入同样的事件却有效，且与应用内的调用线程、启动方式都无关。机制未查明，
+//! 但 UIA 走的是完全不同的通路，因此不受影响。
+//!
+//! 剪贴板法的已知代价（都能接受）：
+//!  1. 会短暂占用剪贴板，所以必须尽快还原；
+//!  2. 若原内容不是文本（图片、文件），`arboard` 无法完整还原，此时我们
 //!     **保留抓到的文本而不是清空剪贴板**，避免把用户的东西弄丢。
 
 use std::time::{Duration, Instant};
@@ -16,6 +22,63 @@ use std::time::{Duration, Instant};
 /// 完全无法判断是没取到、取错了、还是传丢了。
 fn note(msg: impl AsRef<str>) {
     crate::log_line("startup.log", &format!("[取词] {}", msg.as_ref()));
+}
+
+/// 用 UI Automation **直接读取**焦点元素的选中文本。
+///
+/// 返回 `Ok(None)` 表示「焦点元素不支持 TextPattern，或没有选中任何文本」——
+/// 这属于正常情况（很多自绘控件、部分终端不支持），调用方应改用剪贴板法。
+///
+/// 两个容易踩的点：
+/// * COM 必须在**调用线程**上初始化。取词跑在 spawn 出来的线程里，所以在这里初始化；
+///   `RPC_E_CHANGED_MODE`（该线程已按别的套间模型初始化过）不算错误，忽略即可。
+/// * Chromium 系浏览器是**按需**启用无障碍树的，第一次查询常常拿不到文本。
+///   这里失败就交给剪贴板法，不做重试——重试留给用户下一次按热键。
+#[cfg(windows)]
+fn uia_selection() -> Result<Option<String>, String> {
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+    };
+
+    unsafe {
+        // 已初始化过会返回 S_FALSE 或 RPC_E_CHANGED_MODE，都无所谓
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let automation: IUIAutomation =
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("创建 IUIAutomation 失败：{e}"))?;
+        let element = automation
+            .GetFocusedElement()
+            .map_err(|e| format!("取焦点元素失败：{e}"))?;
+
+        let pattern: IUIAutomationTextPattern = match element.GetCurrentPatternAs(UIA_TextPatternId) {
+            Ok(p) => p,
+            Err(_) => return Ok(None), // 该控件不支持 TextPattern
+        };
+        let ranges = match pattern.GetSelection() {
+            Ok(r) => r,
+            Err(_) => return Ok(None),
+        };
+
+        let count = ranges.Length().unwrap_or(0);
+        let mut out = String::new();
+        for i in 0..count {
+            if let Ok(range) = ranges.GetElement(i) {
+                if let Ok(text) = range.GetText(-1) {
+                    out.push_str(&text.to_string());
+                }
+            }
+        }
+        Ok(Some(out))
+    }
+}
+
+#[cfg(not(windows))]
+fn uia_selection() -> Result<Option<String>, String> {
+    Ok(None)
 }
 
 /// 取词结果。
@@ -32,9 +95,29 @@ pub struct Capture {
 
 /// 取当前前台窗口的选中文本。
 ///
-/// `timeout_ms` 是等待目标程序写入剪贴板的上限。太小会在慢程序里丢词，
+/// `timeout_ms` 是剪贴板法里等待目标程序写入的上限。太小会在慢程序里丢词，
 /// 太大则在「没有选中内容」时会明显卡顿。
 pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
+    // 第一路：UIA 直接读。不合成按键、不碰剪贴板，最干净也最快。
+    match uia_selection() {
+        Ok(Some(text)) if !text.trim().is_empty() => {
+            note(format!(
+                "UIA 读取成功：{} 字符（未合成按键、未触碰剪贴板）",
+                text.chars().count()
+            ));
+            return Ok(Capture {
+                text,
+                reason: String::new(),
+            });
+        }
+        Ok(_) => note("UIA 表示焦点元素没有选中文本（或该控件不支持 TextPattern），改用剪贴板法"),
+        Err(e) => note(format!("UIA 不可用（{e}），改用剪贴板法")),
+    }
+    capture_via_clipboard(timeout_ms)
+}
+
+/// 剪贴板模拟法：暂存 → 模拟 Ctrl+C → 等序列号变化 → 读走 → 还原。
+fn capture_via_clipboard(timeout_ms: u64) -> Result<Capture, String> {
     let before = platform::clipboard_seq();
 
     // 1) 先把原内容读出来保存。
@@ -140,9 +223,11 @@ pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
         ));
         // 给用户看的说法要**短**：小窗只有 460px 宽，塞进长窗口标题会横向溢出。
         // 详细的「发给谁、修饰键状态」留在日志里，这里只说清原因和下一步怎么办。
-        reason = "没有取到选中内容：Ctrl+C 没有被目标程序响应。\
-                  常见原因是两者权限级别不一致，或目标程序不支持复制。\
-                  可以点下面的输入框直接手输要查的词。"
+        reason = "没有取到选中内容：程序已尝试「直接读取」与「模拟复制」两种方式，\
+                  都没拿到文本。请先确认确实选中了文字。\
+                  若目标程序是以管理员身份运行的，请也用管理员身份启动本程序——\
+                  权限级别不一致时 Windows 会拦掉取词（且不报错）。\
+                  也可以点下面的输入框直接手输要查的词。"
             .to_string();
     }
 
