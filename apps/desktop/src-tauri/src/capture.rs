@@ -24,18 +24,49 @@ fn note(msg: impl AsRef<str>) {
     crate::log_line("startup.log", &format!("[取词] {}", msg.as_ref()));
 }
 
+/// UIA 控件类型的可读名。
+///
+/// 为什么需要：UIA 返回的是一串数字（`ControlType=50032`），而「焦点落在**窗口**上」
+/// 与「焦点落在**文本框**里但没选中」是完全不同的两件事，用户看到数字无从判断。
+/// 实测最常见的一种失败就是前者：用户以为选好了词，其实按热键时焦点在浏览器窗口上。
+fn control_type_name(id: i32) -> &'static str {
+    match id {
+        50000 => "按钮",
+        50003 => "下拉框",
+        50004 => "文本框",
+        50005 => "链接",
+        50007 => "列表项",
+        50008 => "列表",
+        50013 => "单选框",
+        50020 => "文本",
+        50025 => "自定义控件",
+        50026 => "分组",
+        50030 => "文档",
+        50032 => "窗口",
+        50033 => "面板",
+        50034 => "标题栏",
+        50036 => "表格",
+        50037 => "标题栏",
+        _ => "未知控件",
+    }
+}
+
 /// 用 UI Automation **直接读取**焦点元素的选中文本。
 ///
-/// 返回 `Ok(None)` 表示「焦点元素不支持 TextPattern，或没有选中任何文本」——
-/// 这属于正常情况（很多自绘控件、部分终端不支持），调用方应改用剪贴板法。
+/// 返回 `(文本, 给用户看的诊断)`：
+/// * 成功 → `(Some(text), "")`
+/// * 失败 → `(None, 一句能指导下一步的话)`
+///
+/// 区分失败原因是关键——「没有选中文字」和「焦点压根不在文本框里」对用户来说
+/// 需要做完全不同的事，而这两者以前在界面上长得一模一样。
 ///
 /// 两个容易踩的点：
-/// * COM 必须在**调用线程**上初始化。取词跑在 spawn 出来的线程里，所以在这里初始化；
-///   `RPC_E_CHANGED_MODE`（该线程已按别的套间模型初始化过）不算错误，忽略即可。
-/// * Chromium 系浏览器是**按需**启用无障碍树的，第一次查询常常拿不到文本。
-///   这里失败就交给剪贴板法，不做重试——重试留给用户下一次按热键。
+/// * COM 必须在**调用线程**上初始化，且必须用 **MTA**（STA 下跨进程取模式会失败）。
+/// * Chromium 系浏览器的无障碍树是**按需**启用的，第一次查询常常只能拿到顶层窗口
+///   （`Class="Chrome_WidgetWin_1"`、`ControlType=窗口`）。这不是本程序的 bug，
+///   换成 TextGO 等同类工具也一样。
 #[cfg(windows)]
-fn uia_selection() -> Result<Option<String>, String> {
+fn uia_selection() -> (Option<String>, String) {
     use windows::core::Interface;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -45,29 +76,28 @@ fn uia_selection() -> Result<Option<String>, String> {
     };
 
     unsafe {
-        // ⚠ 必须用 **MTA**（COINIT_MULTITHREADED），不能用 STA。
-        //
-        // 用 STA 时 `GetFocusedElement()` 能成功（能拿到元素的 Class/Name/pid），
-        // 但紧接着 `GetCurrentPatternAs(UIA_TextPatternId)` 会失败、且返回的 HRESULT
-        // 是 0x00000000 —— 看起来像「控件不支持 TextPattern」，其实是套间模型不对导致
-        // 跨进程取模式失败。实测同一个 WinForms 文本框，用 MTA 的 UIA 客户端
-        // （PowerShell 的 System.Windows.Automation）能正常拿到 TextPattern 与选区。
-        //
-        // 已初始化过会返回 S_FALSE 或 RPC_E_CHANGED_MODE，都无所谓。
+        // 已初始化过会返回 S_FALSE 或 RPC_E_CHANGED_MODE，都无所谓
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
         let automation: IUIAutomation =
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("创建 IUIAutomation 失败：{e}"))?;
-        let element = automation
-            .GetFocusedElement()
-            .map_err(|e| format!("取焦点元素失败：{e}"))?;
+            match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+                Ok(a) => a,
+                Err(e) => {
+                    let m = format!("无障碍接口不可用（创建 IUIAutomation 失败：{e}）");
+                    note(&m);
+                    return (None, m);
+                }
+            };
+        let element = match automation.GetFocusedElement() {
+            Ok(el) => el,
+            Err(e) => {
+                let m = format!("取不到焦点元素（{e}）");
+                note(&m);
+                return (None, m);
+            }
+        };
 
-        // 把「焦点元素到底是谁」记下来。
-        //
-        // 这是排查取词失败最重要的一条信息：如果这里显示的不是用户以为的那个程序，
-        // 说明按热键的瞬间焦点已经在别处（窗口被抢焦点是最常见的原因），
-        // 那么「没取到内容」就是**正确行为**，而不是取词坏了。
+        // 焦点元素到底是谁：Class / Name / ControlType 都记下来。
         let name = element.CurrentName().map(|b| b.to_string()).unwrap_or_default();
         let class = element
             .CurrentClassName()
@@ -75,39 +105,49 @@ fn uia_selection() -> Result<Option<String>, String> {
             .unwrap_or_default();
         let ctype = element.CurrentControlType().map(|c| c.0).unwrap_or(-1);
         let pid = element.CurrentProcessId().unwrap_or(-1);
-        let who = format!("pid={pid} Class={class:?} Name={name:?} ControlType={ctype}");
+        let kind = control_type_name(ctype);
+        let who = format!("pid={pid} Class={class:?} Name={name:?} ControlType={ctype}({kind})");
 
-        // 用 GetCurrentPattern + cast，而不是泛型的 GetCurrentPatternAs。
-        //
-        // 原因：`GetCurrentPatternAs` 失败时返回的 HRESULT 是 0x00000000
-        // （「操作成功完成」却当成错误），完全看不出真实原因，而且实测同一个控件
-        // 用 PowerShell 的 UIA 客户端能拿到 TextPattern、这里却拿不到。
-        // 这一步拿到的是 IUnknown，失败原因能看清楚。
-        let pattern: IUIAutomationTextPattern = match element.GetCurrentPattern(UIA_TextPatternId) {
-            Ok(unknown) => match unknown.cast() {
+        // 用 GetCurrentPattern + cast（与 TextGO 的写法一致）。
+        // 泛型的 GetCurrentPatternAs 失败时返回的 HRESULT 是 0x00000000，
+        // 看不出任何原因；这一步失败时至少能判断「取到模式但转换失败」。
+        let pattern: IUIAutomationTextPattern =
+            match element.GetCurrentPattern(UIA_TextPatternId).and_then(|p| p.cast()) {
                 Ok(p) => p,
                 Err(e) => {
-                    note(format!("UIA 焦点元素 {who}；取到模式但转换为 TextPattern 失败（{e}）"));
-                    return Ok(None);
+                    note(format!("UIA 焦点元素 {who}；该控件不支持 TextPattern（{e}）"));
+                    // 焦点在「窗口/面板」上是最常见也最容易误解的一种失败：
+                    // 用户以为选好了词，其实按热键时焦点根本不在任何文本框里。
+                    let msg = match ctype {
+                        50032 | 50033 => format!(
+                            "焦点在「{}」这个{}上，而不是某个文本框/页面里。\
+                             请先在目标程序里点一下输入区域、选中文字，再按热键。",
+                            if name.is_empty() { "目标程序" } else { &name },
+                            kind
+                        ),
+                        _ => format!(
+                            "焦点控件（{kind}，Class={class}）不支持直接读取选区。"
+                        ),
+                    };
+                    return (None, msg);
                 }
-            },
-            Err(e) => {
-                note(format!("UIA 焦点元素 {who}；该控件不支持 TextPattern（{e}），改用剪贴板法"));
-                return Ok(None);
-            }
-        };
+            };
         let ranges = match pattern.GetSelection() {
             Ok(r) => r,
             Err(e) => {
                 note(format!("UIA 焦点元素 {who}；TextPattern 可用但取选区失败（{e}）"));
-                return Ok(None);
+                return (None, format!("取不到选区（{e}）"));
             }
         };
 
         let count = ranges.Length().unwrap_or(0);
-        note(format!(
-            "UIA 焦点元素 {who}；TextPattern 可用，选中 {count} 段"
-        ));
+        note(format!("UIA 焦点元素 {who}；TextPattern 可用，选中 {count} 段"));
+        if count == 0 {
+            return (
+                None,
+                format!("焦点控件（{kind}）支持读取，但当前选中 0 段——没有选中文字。"),
+            );
+        }
         let mut out = String::new();
         for i in 0..count {
             if let Ok(range) = ranges.GetElement(i) {
@@ -116,13 +156,13 @@ fn uia_selection() -> Result<Option<String>, String> {
                 }
             }
         }
-        Ok(Some(out))
+        (Some(out), String::new())
     }
 }
 
 #[cfg(not(windows))]
-fn uia_selection() -> Result<Option<String>, String> {
-    Ok(None)
+fn uia_selection() -> (Option<String>, String) {
+    (None, "非 Windows 平台".into())
 }
 
 /// 取词结果。
@@ -140,11 +180,12 @@ pub struct Capture {
 /// 取当前前台窗口的选中文本。
 ///
 /// `timeout_ms` 是剪贴板法里等待目标程序写入的上限。太小会在慢程序里丢词，
-/// 太大则在「没有选中内容」时会明显卡顿。
+/// 太大则在「没有选中内容」时会明显卡顿。参考同类工具（TextGO 默认 1000ms）。
 pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
     // 第一路：UIA 直接读。不合成按键、不碰剪贴板，最干净也最快。
-    match uia_selection() {
-        Ok(Some(text)) if !text.trim().is_empty() => {
+    let (uia_text, uia_note) = uia_selection();
+    if let Some(text) = uia_text {
+        if !text.trim().is_empty() {
             note(format!(
                 "UIA 读取成功：{} 字符（未合成按键、未触碰剪贴板）",
                 text.chars().count()
@@ -154,10 +195,46 @@ pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
                 reason: String::new(),
             });
         }
-        Ok(_) => note("UIA 表示焦点元素没有选中文本（或该控件不支持 TextPattern），改用剪贴板法"),
-        Err(e) => note(format!("UIA 不可用（{e}），改用剪贴板法")),
     }
-    capture_via_clipboard(timeout_ms)
+    note(format!("改用剪贴板法。UIA 未取到的原因：{uia_note}"));
+
+    let mut via_clipboard = capture_via_clipboard(timeout_ms)?;
+    if !via_clipboard.text.trim().is_empty() {
+        return Ok(via_clipboard);
+    }
+
+    // 第三路兜底：直接用剪贴板里**已有**的内容。
+    //
+    // 这一条不注入任何按键、不读任何无障碍接口，因此不受「合成输入被丢弃」
+    // 「UIA 被拦」「权限级别不一致」「安全软件 hook」这一整类问题影响。
+    // 用户只要自己按一次 Ctrl+C，剪贴板里就是他要查的文字。
+    //
+    // 行业里也是这么兜的：「复制即翻译」类工具干脆只做这一步，完全不碰系统通路。
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        if let Ok(existing) = cb.get_text() {
+            if !existing.trim().is_empty() {
+                note(format!(
+                    "取词失败，改用剪贴板里已有的内容：{} 字符",
+                    existing.chars().count()
+                ));
+                return Ok(Capture {
+                    text: existing,
+                    reason: String::new(),
+                });
+            }
+        }
+    }
+
+    // 三条路都空：把**最有指导性**的说明放到界面最前面。
+    // UIA 的诊断能区分「焦点不在文本框里」与「没选中文字」，比笼统的
+    // 「没取到内容」有用得多——前者要用户去点一下输入区，后者要用户去选字。
+    if !uia_note.is_empty() {
+        via_clipboard.reason = format!(
+            "{uia_note}程序模拟的 Ctrl+C 也没有被响应。\
+             也可以先自己按一次 Ctrl+C 再按热键，或直接在下面手输要查的词。"
+        );
+    }
+    Ok(via_clipboard)
 }
 
 /// 剪贴板模拟法：暂存 → 模拟 Ctrl+C → 等序列号变化 → 读走 → 还原。

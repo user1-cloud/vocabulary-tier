@@ -733,7 +733,7 @@ fn set_settings(
 
 #[tauri::command]
 async fn capture_selection(state: State<'_, AppState>) -> Result<String, String> {
-    let cap = tauri::async_runtime::spawn_blocking(|| capture::capture_selection(420))
+    let cap = tauri::async_runtime::spawn_blocking(|| capture::capture_selection(1000))
         .await
         .map_err(|e| format!("取词任务失败：{e}"))??;
     if !cap.text.is_empty() {
@@ -940,7 +940,7 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         // 取词会阻塞几百毫秒（等目标程序写剪贴板），绝不能占着热键回调线程
         let h = handle.clone();
         let run_capture = move || {
-            let (text, reason) = match capture::capture_selection(420) {
+            let (text, reason) = match capture::capture_selection(1000) {
                 Ok(c) => (c.text, c.reason),
                 Err(e) => (String::new(), format!("取词失败：{e}")),
             };
