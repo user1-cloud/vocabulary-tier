@@ -4,6 +4,8 @@ import App from './App.svelte';
 import PopupApp from './PopupApp.svelte';
 import { initTheme } from './lib/theme.svelte';
 import { setupThemeSync } from './lib/theme-sync';
+import { applyLocaleToDocument } from './lib/i18n.svelte';
+import { setupLocaleSync } from './lib/locale-sync';
 
 /**
  * 入口：按窗口 label 分流。
@@ -77,6 +79,16 @@ if (label === 'popup') {
  */
 initTheme();
 setupThemeSync();
+
+/**
+ * 界面语言同理：两个窗口都要把当前语言打到 `<html lang>` 与窗口标题上，
+ * 并订阅另一个窗口的语言变化（StorageEvent + Tauri 事件总线，见 $lib/locale-sync.ts）。
+ *
+ * `applyLocaleToDocument()` 用的是 `localStorage` 里的镜像值；后端设置里的权威值
+ * 在各自窗口读到 `get_settings` 之后由 `adoptLocaleFromSettings()` 接管。
+ */
+applyLocaleToDocument();
+setupLocaleSync();
 
 const app = mount(label === 'popup' ? PopupApp : App, { target });
 

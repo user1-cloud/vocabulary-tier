@@ -17,12 +17,14 @@
     type RouteId,
   } from '$lib/navigation';
   import { initTheme } from '$lib/theme.svelte';
+  import { adoptLocaleFromSettings, t } from '$lib/i18n.svelte';
   import { onPopupReply } from '$lib/api/bridge';
   import { loadTierSettings } from '$lib/tiers.svelte';
 
   import WordFreqPage from './routes/WordFreqPage.svelte';
   import SentencesPage from './routes/SentencesPage.svelte';
   import LeaderboardPage from './routes/LeaderboardPage.svelte';
+  import DictsPage from './routes/DictsPage.svelte';
   import TablesPage from './routes/TablesPage.svelte';
   import SettingsPage from './routes/SettingsPage.svelte';
 
@@ -61,11 +63,15 @@
   // $effect 的返回值会被当作清理函数，组件卸载时自动移除 matchMedia 监听。
   $effect(() => initTheme());
 
-  // 全局设置只读一次：分组自定义（tierMethod / tier*Bounds / tierCoverage）与
-  // 表开关（enabledTables）是所有页面共享的状态，放在 $lib/tiers.svelte.ts 里。
+  // 全局设置只读一次：分组自定义（tierMethod / tierPct / tier*Bounds / tierCoverage）与
+  // 主词频表（primaryScope）是所有页面共享的状态，放在 $lib/tiers.svelte.ts 里。
   // 失败时用 defaultSettings()，界面照 meta 默认阈值渲染，不会崩。
   $effect(() => {
-    void loadTierSettings();
+    void loadTierSettings().then((res) => {
+      // 界面语言的**权威值**在设置里（localStorage 只是首屏的快速通道，
+      // 主窗口与小窗的存储可能被宿主隔开），读到就采用。
+      if (res.ok) adoptLocaleFromSettings(res.data.locale);
+    });
   });
 
   // 跨页面跳转 / 「加入分析」/ 悬浮小窗回传文本
@@ -101,7 +107,7 @@
   <Sidebar bind:active={route} />
 
   <div class="flex min-w-0 flex-1 flex-col">
-    <Topbar title={current.title} description={current.description} />
+    <Topbar title={t(current.titleKey)} description={t(current.descriptionKey)} />
 
     <main class="scrollbar-thin flex-1 overflow-y-auto bg-surface-muted/40 p-6">
       <div class="mx-auto w-full max-w-5xl">
@@ -112,6 +118,8 @@
             <SentencesPage initialText={sentencesSeed} />
           {:else if route === 'leaderboard'}
             <LeaderboardPage />
+          {:else if route === 'dicts'}
+            <DictsPage />
           {:else if route === 'tables'}
             <TablesPage />
           {:else if route === 'settings'}

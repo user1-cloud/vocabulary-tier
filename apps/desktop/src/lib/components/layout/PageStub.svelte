@@ -8,6 +8,7 @@
    */
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
   import { Badge } from '$lib/components/ui/badge';
+  import { t } from '$lib/i18n.svelte';
 
   type Props = {
     /** 页面主标题（与顶栏一致） */
@@ -31,7 +32,7 @@
     <CardHeader>
       <div class="flex items-center gap-2">
         <CardTitle>{title}</CardTitle>
-        <Badge variant="outline">待实现</Badge>
+        <Badge variant="outline">{t('layout.stub.pending')}</Badge>
       </div>
       <CardDescription>{summary}</CardDescription>
     </CardHeader>
@@ -60,8 +61,8 @@
   {#if hooks.length > 0}
     <Card>
       <CardHeader>
-        <CardTitle>接入指引</CardTitle>
-        <CardDescription>后续业务逻辑建议挂载在这些位置</CardDescription>
+        <CardTitle>{t('layout.stub.hooksTitle')}</CardTitle>
+        <CardDescription>{t('layout.stub.hooksDesc')}</CardDescription>
       </CardHeader>
       <CardContent>
         <ul class="flex flex-col gap-1.5">

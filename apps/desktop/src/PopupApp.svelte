@@ -9,13 +9,13 @@
    *         （固定高度、独立滚动，永远占满剩余空间）
    *
    * 缩放时的让位顺序（用户要求）：
-   *   窗口变矮 → 先压缩「着色 token 卡片」，直到它出现滚动条（内容刚好放得下）；
-   *   再继续变矮 → 才开始压缩下面的「词条详情」。
-   *   实现靠 flex：卡片 `flex-1` + `min-h-24`，详情 `h-28 min-h-24 max-h-[55%]`。
-   *   收缩空间先按比例从卡片里扣，卡片到下限之后才轮到详情。
-   *   （实测：480×320 时卡片出现滚动条，480×300 起详情才开始变矮。）
+   *   窗口变矮 → 先压缩「着色 token 卡片」，压到内容放不下（出现滚动条）那一刻；
+   *   卡片触到 min-h-16 之后 → 才开始压缩下面的「词条详情」。
+   *   实现：卡片 `flex-1 min-h-16`，详情 `h-48 min-h-24 shrink basis-auto`。
+   *   flex 按比例收缩，卡片基数大所以先让位；两块都有下限，极矮时也是卡片先到底。
+   *   实测：480×420 卡片出现滚动条，480×340 起详情才开始变矮。
    *
-   * 为什么详情是固定区域而不是跟随鼠标的浮层：小窗只有 ~460×340，浮层一靠近
+   * 为什么详情是固定区域而不是跟随鼠标的浮层：小窗默认只有 480×420，浮层一靠近
    * 窗口边缘就被裁掉，读不全。固定区域永远在窗口内，内容多了自己滚。
    *
    * 文本从哪来（两条路都走，互不覆盖）：
@@ -30,9 +30,9 @@
   import TokenDetail from '$lib/components/analysis/TokenDetail.svelte';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
   import {
+    activeDataset,
     analyzeText,
     copyText,
-    datasetStatus,
     emitPopupReply,
     fetchCaptureNote,
     getSettings,
@@ -40,12 +40,12 @@
     isTauri,
     onPopupNote,
     onPopupText,
-    openDataset,
     takePendingSelection,
   } from '$lib/api/bridge';
   import { findTable } from '$lib/format';
   import { cn } from '$lib/utils';
-  import { THEME_LABELS, setTheme, theme } from '$lib/theme.svelte';
+  import { setTheme, theme, themeLabel } from '$lib/theme.svelte';
+  import { adoptLocaleFromSettings, t } from '$lib/i18n.svelte';
   import { nextThemeMode, themeToggleHint } from '$lib/theme-sync';
   import IconMoon from '$lib/components/icons/IconMoon.svelte';
   import IconSun from '$lib/components/icons/IconSun.svelte';
@@ -53,17 +53,17 @@
     activeBounds,
     activeTierIndex,
     appSettings,
+    primaryTableKey,
     tierCurves,
-    tierNameAt,
     tierNamesOf,
   } from '$lib/tiers.svelte';
+  import { tierKeysFrom } from '$lib/tier-colors';
   import { summarizeTokens } from '$lib/segments';
   import type { Meta, Settings, TokenInfo } from '$lib/types';
 
   let text = $state('');
   let tokens = $state<TokenInfo[]>([]);
   let meta = $state<Meta | null>(null);
-  let datasetDir = $state<string | null>(null);
   let settingsState = $state<Settings | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -95,9 +95,10 @@
    */
   let immediate: { value: string; ready: boolean } | null = null;
 
-  const summary = $derived(summarizeTokens(tokens, tierNameOfToken));
+  const summary = $derived(summarizeTokens(tokens, tierIndexOfToken));
   const wordBounds = $derived(meta ? activeBounds('word', meta) : []);
   const tierNames = $derived(tierNamesOf(meta));
+  const tierKeys = $derived(tierKeysFrom(meta));
   const hasTable = $derived(meta !== null);
 
   /**
@@ -117,17 +118,17 @@
   /** 顶部主题按钮的提示文案：当前档位 + 点一下会切到哪一档 */
   const themeHint = $derived(themeToggleHint(theme.mode));
 
-  /** 一个 token 实际落在哪一组（自定义阈值下与后端给的 tier 不同） */
-  function tierNameOfToken(token: TokenInfo): string | null {
-    if (!meta) return token.tier_name;
-    const isChar = token.single_cjk || token.table === 'char';
-    const index = activeTierIndex(
-      isChar ? 'char' : 'word',
-      token.rank,
-      meta,
-      isChar ? 'full/char' : 'full/word'
-    );
-    return tierNameAt(index, tierNames) ?? token.tier_name;
+  /**
+   * 一个 token 实际落在哪一组 —— 返回**组号**（0..6），未收录返回 null。
+   *
+   * 自定义阈值下与后端给的 `tier` 可能不同；算不出生效组号时回落到 `token.tier`。
+   */
+  function tierIndexOfToken(token: TokenInfo): number | null {
+    if (!meta) return token.tier;
+    const kind = token.single_cjk || token.table === 'char' ? 'char' : 'word';
+    // 阈值取自**主作用域**那张表（小窗与主窗口必须是同一套口径，否则同一句话两处颜色不同）
+    const index = activeTierIndex(kind, token.rank, meta, primaryTableKey(meta, kind));
+    return index ?? token.tier;
   }
 
   // ---------------------------------------------------------------- 生命周期
@@ -178,6 +179,8 @@
     const settingsRes = await getSettings();
     if (settingsRes.ok) {
       settingsState = settingsRes.data;
+      // 界面语言以设置为准（localStorage 只是首屏快速通道）
+      adoptLocaleFromSettings(settingsRes.data.locale);
       // 透明度由设置决定，直接作用到根元素上，避免窗口整体透明度过低看不清字
       const opacity = Math.min(1, Math.max(0.3, settingsRes.data.popupOpacity || 1));
       document.documentElement.style.setProperty('--popup-opacity', String(opacity));
@@ -186,19 +189,11 @@
       }
     }
 
-    const dir = settingsRes.ok
-      ? (settingsRes.data.dataDir ?? settingsRes.data.corpusDir)
-      : null;
-    const status = await datasetStatus(dir);
-    if (status.ok && status.data.exists && status.data.meta) {
-      // 让后端装载产物（按 meta.tokenizer 重建分词器）。失败则退回
-      // dataset_status 里带的 meta，不阻塞小窗。
-      const opened = await openDataset(status.data.dir);
-      meta = opened.ok ? opened.data : status.data.meta;
-      datasetDir = status.data.dir;
-    } else {
-      meta = null;
-    }
+    // 当前打开的那张表：**取**后端的，不再用 settings.dataDir 拼路径 ——
+    // dataDir 现在是「数据文件夹」（里面是 dicts\ 与 tables\），它下面没有 meta.json。
+    // 也不再需要 open_dataset：后端在启动 / 激活时已经按词库链重建过分词器。
+    const current = await activeDataset();
+    meta = current.ok && current.data ? current.data : null;
 
     // 第一次打开小窗时，事件与挂载取词存在竞态：
     //   - 先收到事件（可能是空串）→ applyPopupText 已经把文本放进去了，这里不再覆盖；
@@ -266,7 +261,8 @@
       return;
     }
     const seq = ++requestSeq;
-    const res = await analyzeText(value, [], datasetDir);
+    // dir 传 null = 用后端当前打开的那张表（见 ensure_dataset 的语义）
+    const res = await analyzeText(value, [], null);
     if (seq !== requestSeq) return;
     if (!res.ok) {
       error = res.error;
@@ -318,20 +314,20 @@
 
   async function copyAll() {
     if (!text.trim()) {
-      flash('没有可复制的内容');
+      flash(t('popup.copyEmpty'));
       return;
     }
     const res = await copyText(text);
-    flash(res.ok ? '已复制' : res.error);
+    flash(res.ok ? t('popup.copied') : res.error);
   }
 
   async function sendBack() {
     if (!text.trim()) {
-      flash('没有可回传的内容');
+      flash(t('popup.sendEmpty'));
       return;
     }
     const res = await emitPopupReply(text);
-    flash(res.ok ? '已发送到主窗口' : res.error);
+    flash(res.ok ? t('popup.sentToMain') : res.error);
   }
 
   async function closeWindow() {
@@ -368,11 +364,11 @@
     class="flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-muted/70 px-2.5 select-none"
   >
     <span data-tauri-drag-region class="text-[11px] font-medium text-muted-foreground">
-      VocTier 取词
+      {t('popup.title')}
     </span>
     {#if !hasTable && !loading}
       <span data-tauri-drag-region class="text-[10px] text-amber-600 dark:text-amber-400">
-        无词频表
+        {t('popup.noTable')}
       </span>
     {/if}
     {#if notice}
@@ -388,8 +384,8 @@
         type="button"
         draggable="false"
         class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        title={`主题：${themeHint}`}
-        aria-label="切换主题"
+        title={t('popup.themeTitle', { hint: themeHint })}
+        aria-label={t('popup.themeAria')}
         data-testid="popup-theme-toggle"
         onclick={() => setTheme(nextThemeMode(theme.mode))}
       >
@@ -400,32 +396,32 @@
         {:else}
           <span class="text-[10px] leading-none">◐</span>
         {/if}
-        <span>{THEME_LABELS[theme.mode]}</span>
+        <span>{themeLabel(theme.mode)}</span>
       </button>
       <button
         type="button"
         draggable="false"
         class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        title="复制全文"
+        title={t('popup.copyAllTitle')}
         onclick={() => void copyAll()}
       >
-        复制
+        {t('popup.copy')}
       </button>
       <button
         type="button"
         draggable="false"
         class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-        title="发送到主窗口（划句分析页）"
+        title={t('popup.sendTitle')}
         onclick={() => void sendBack()}
       >
-        发回主窗口
+        {t('popup.sendBack')}
       </button>
       <button
         type="button"
         draggable="false"
         class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-        title="隐藏小窗"
-        aria-label="关闭小窗"
+        title={t('popup.hideTitle')}
+        aria-label={t('popup.closeAria')}
         onclick={() => void closeWindow()}
       >
         ✕
@@ -440,7 +436,7 @@
       oninput={() => (userEdited = true)}
       rows="2"
       spellcheck="false"
-      placeholder="粘贴或输入要查词的中文…"
+      placeholder={t('popup.inputPlaceholder')}
       class={cn(
         'scrollbar-thin max-h-20 min-h-9 flex-1 resize-none rounded-md border border-input bg-surface px-2 py-1',
         'text-xs leading-relaxed text-foreground placeholder:text-muted-foreground',
@@ -451,25 +447,38 @@
       <button
         type="button"
         class="rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent"
-        title="清空"
+        title={t('popup.clearTitle')}
         onclick={clearText}
       >
-        清空
+        {t('popup.clear')}
       </button>
     {/if}
   </div>
 
   <!-- 着色 token 卡片（上半，自己滚动）。
-       缩放时第一个让位：flex 先把它的空间扣掉，扣到内容放不下（出现滚动条）为止；
-       再继续变矮才轮到下面的词条详情。
-       min-h-24(96px) 是它的下限：窗口被拖到极限时也别让这一栏彻底消失。 -->
-  <div class="scrollbar-thin flex min-h-24 flex-1 flex-col justify-center overflow-y-auto px-2.5 py-2">
+       ⚠️ 三个要点，改之前先读：
+       1. 里面的两个子块必须 `shrink-0`。flex 子项默认 flex-shrink:1，不锁住的话
+          它们会把自己**压扁**来适应高度 —— 那样 card 的 scrollHeight 永远等于
+          clientHeight，浏览器认为「没溢出」，滚动条就出不来。
+       2. 本栏用 `flex: 1 1 auto`（**basis 是 auto，不是 0%**）+ `min-h-16`。
+          basis:auto = 「以内容自然高度为基准，再按 grow/shrink 分配空间」。
+          这样窗口变高时，多出来的空间会**同时**分给本栏和下面的详情区，
+          详情区才可能长大到「不用滚动、一眼看尽」。
+          （用 `flex-1` 时 basis 是 0%，它会把自由空间全吃光，详情区加多少
+          grow 都拿不到空间 —— 这个坑我踩过，实测四种写法结果完全一样。）
+       3. 收窗口时本栏先让位：内容放不下 → 出现滚动条 → 压到 min-h-16 之后，
+          才轮到详情区变矮。 -->
+  <div
+    data-testid="popup-token-cards"
+    style="flex: 1 1 auto;"
+    class="scrollbar-thin flex min-h-16 flex-col overflow-y-auto px-2.5 py-2"
+  >
     {#if loading}
-      <p class="py-6 text-center text-[11px] text-muted-foreground">正在载入词频表…</p>
+      <p class="py-6 text-center text-[11px] text-muted-foreground">{t('popup.loading')}</p>
     {:else if !hasTable}
       <div class="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
-        <p>还没有可用的词频表，取词结果无法着色。</p>
-        <p class="mt-1">请先在主窗口的「生成词频表」页完成一次统计。</p>
+        <p>{t('popup.noTableDesc')}</p>
+        <p class="mt-1">{t('popup.noTableHint')}</p>
       </div>
     {:else if !text.trim()}
       {#if captureNote}
@@ -483,7 +492,7 @@
         </div>
       {:else}
         <p class="py-6 text-center text-[11px] text-muted-foreground">
-          输入或粘贴文字后，这里会实时显示每个词的分组着色。
+          {t('popup.emptyHint')}
         </p>
       {/if}
     {:else}
@@ -504,20 +513,23 @@
         </p>
       {/if}
 
-      <TokenChips
-        {tokens}
-        compact
-        {meta}
-        {settings}
-        curves={tierCurves}
-        activeIndex={shownIndex}
-        onHover={(token) => onHover(token)}
-        onPick={(token) => onPick(token)}
-      />
+      <div class="mb-2 shrink-0">
+        <TokenChips
+          {tokens}
+          compact
+          {meta}
+          {settings}
+          curves={tierCurves}
+          activeIndex={shownIndex}
+          onHover={(token) => onHover(token)}
+          onPick={(token) => onPick(token)}
+        />
+      </div>
 
-      <div class="mt-2 border-t border-border pt-1.5">
+      <div class="mt-auto shrink-0 border-t border-border pt-1.5">
         <TierLegend
           names={tierNames}
+          keys={tierKeys}
           bounds={wordBounds}
           class="gap-x-2 gap-y-1"
         />
@@ -525,30 +537,33 @@
     {/if}
   </div>
 
-  <!-- 词条详情：高度与**内容**无关（选中标点还是长词都一样高），恒定 112px。
-       112px 是实测出来的「四格数据 + 徽标行（词典标记）」够用的高度；
-       注意**不能**给它 flex-grow：试过之后窗口一高它就按 55% 抢走半屏，
-       上面那份 token 列表只剩两行（token 列表才是主体内容）。
-       窗口变矮时它是第二个让位的（第一是上面那栏），min-h-24 是它自己的下限。 -->
+  <!-- 词条详情：**能长大到不用滚动**，也能在窗口变矮时让位。
+       实测「骨架（词头+四格+徽标行）+ 各分域排名 + 未收录说明」最多需要约 270px。
+       `flex: 3 1 auto` 里那个 **3** 是关键：它和中栏（grow 1）按 1:3 分多余空间，
+       实测窗高 ≥520 时详情区就能长到「内容全放下、不用滚动、一眼看尽」，
+       同时中栏还能保留约 147px（≈5 行 token）。给 1:1 会差 20 多像素、
+       给 grow:0 则中栏永远不变高（窗口拉高它也不长），都不合适。
+       高度 12rem(192px) 是基准，max-height 19rem(304px) 是上限。
+       窗口变矮时它排在中栏之后让位；min-h-32(128px) 是下限，此时骨架仍完整可见。 -->
   <section
-    class="flex h-28 max-h-28 min-h-24 shrink basis-auto flex-col border-t border-border bg-surface-muted/40"
+    style="flex: 3 1 auto; height: 12rem; max-height: 19rem;"
+    class="flex min-h-32 flex-col border-t border-border bg-surface-muted/40"
     data-testid="popup-token-detail"
-    aria-label="词条详情"
+    aria-label={t('popup.detailAria')}
   >
     <div class="flex shrink-0 items-center gap-2 px-2.5 pt-1.5">
-      <span class="text-[10px] font-medium text-muted-foreground">词条详情</span>
+      <span class="text-[10px] font-medium text-muted-foreground">{t('popup.detailTitle')}</span>
       {#if pinnedIndex !== null}
         <button
           type="button"
           class="rounded px-1 text-[10px] text-primary hover:bg-accent"
           onclick={() => (pinnedIndex = null)}
         >
-          取消钉住
+          {t('popup.unpin')}
         </button>
       {/if}
       <span class="ml-auto text-[10px] text-muted-foreground">
-        {summary.accepted} 词 · 未收录 {summary.unknownUnique} 种{#if meta}
-          · 词表 {findTable(meta.tables, 'word')?.entries ?? 0} 条{/if}
+        {t('popup.summary', { accepted: summary.accepted, unknown: summary.unknownUnique })}{#if meta}{t('popup.summaryTable', { entries: findTable(meta.tables, 'word')?.entries ?? 0 })}{/if}
       </span>
     </div>
     <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-1.5">
@@ -559,7 +574,7 @@
         curves={tierCurves}
         compact
         pinned={pinnedIndex !== null}
-        emptyHint="还没有可显示的词条。"
+        emptyHint={t('popup.detailEmpty')}
       />
     </div>
   </section>

@@ -13,18 +13,36 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { inDictFromFlags } from './../tier-colors';
+import { inDictFromFlags, TIER_KEYS } from './../tier-colors';
 import { isCjkChar, isPunctuationOrSpace, normalizeToken } from './../segments';
+import { t } from './../i18n.svelte';
+import {
+  DEFAULT_CHAR_TIER_PCT,
+  DEFAULT_WORD_TIER_PCT,
+  FULL_SCOPE,
+  splitTableKey,
+  tableKey,
+} from './../types';
+import { pctForRank } from './../format';
 import type {
   AppInfo,
+  Binding,
+  ComposeParams,
+  ComposedTable,
   CorpusPlan,
   DatasetStatus,
+  DictItem,
+  DictRef,
+  LibraryInfo,
   Meta,
+  Origin,
   RankRow,
   ScanParams,
   ScanProgress,
   Settings,
+  TableItem,
   TableMeta,
+  TableRank,
   TierCurve,
   TierStat,
   TokenInfo,
@@ -62,7 +80,10 @@ export const POPUP_NOTE_EVENT = 'popup:note';
  */
 export const POPUP_REPLY_EVENT = 'voctier:popup-text';
 
-const NO_TAURI_HINT = '当前不在桌面端运行，这个功能需要 VocTier 桌面应用。';
+/** 非 Tauri 环境下的统一提示（调用时取当前界面语言） */
+function noTauriHint(): string {
+  return t('bridge.noTauri');
+}
 
 // ---------------------------------------------------------------------------
 // 内部工具
@@ -84,7 +105,7 @@ function toMessage(error: unknown): string {
 /** 统一包装：把 invoke 的 reject 转成 Result.false */
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<Result<T>> {
   if (!isTauri()) {
-    return { ok: false, error: NO_TAURI_HINT };
+    return { ok: false, error: noTauriHint() };
   }
   try {
     const data = await invoke<T>(command, args);
@@ -112,8 +133,8 @@ export async function appInfo(): Promise<Result<AppInfo>> {
     data: {
       name: raw.name ?? 'VocTier',
       version: raw.version ?? '0.0.0',
-      tauri_version: raw.tauri_version ?? '未知',
-      core_version: raw.core_version ?? '未知',
+      tauri_version: raw.tauri_version ?? t('bridge.unknownVersion'),
+      core_version: raw.core_version ?? t('bridge.unknownVersion'),
     },
   };
 }
@@ -125,6 +146,194 @@ export async function appInfo(): Promise<Result<AppInfo>> {
 export async function planCorpus(corpus: string): Promise<Result<CorpusPlan>> {
   if (!isTauri()) return { ok: true, data: MOCK.planCorpus(corpus) };
   return call<CorpusPlan>('plan_corpus', { corpus });
+}
+
+// ---------------------------------------------------------------------------
+// 数据文件夹：词库管理（dicts\）+ 词表管理（tables\）
+//
+// 契约提醒（**入参 camelCase、出参 snake_case**）：
+//   - `dict_delete` 的 Rust 参数名是 `file_name`，Tauri 会转成 camelCase，
+//     所以 JS 侧传 `{ fileName }`（与 `analyzeText` 的 `byte_start` → `byteStart`
+//     是同一套规则，见 lib.rs 末尾的契约测试）。
+//   - 返回值一律 snake_case（`dicts_dir` / `file_name` / `in_library` …），
+//     与 `$lib/types.ts::LibraryInfo` 等一一对应，不做映射。
+// ---------------------------------------------------------------------------
+
+/** 数据文件夹的整体状况（词库列表 + 词表列表都由它给的信息定位） */
+export async function libraryInfo(): Promise<Result<LibraryInfo>> {
+  if (!isTauri()) return { ok: true, data: MOCK.libraryInfo() };
+  return call<LibraryInfo>('library_info');
+}
+
+/**
+ * 换数据文件夹。
+ *
+ * 后端只建目录、**不搬运**已有内容，并且会把「当前激活的表」清掉（换了文件夹
+ * 就是换了一整套词库与词表）。所以调用方拿到新 `LibraryInfo` 后应当重新拉
+ * `dict_list()` 与 `table_list()`。
+ */
+export async function setDataDir(dir: string): Promise<Result<LibraryInfo>> {
+  if (!isTauri()) return { ok: true, data: MOCK.setDataDir(dir) };
+  return call<LibraryInfo>('set_data_dir', { dir });
+}
+
+/** 建出数据文件夹的 `dicts\` 与 `tables\`，返回数据文件夹的绝对路径 */
+export async function ensureDataDirs(): Promise<Result<string>> {
+  if (!isTauri()) return { ok: true, data: MOCK_LIB_ROOT };
+  return call<string>('ensure_data_dirs');
+}
+
+/**
+ * 数据文件夹里有没有**可用**的词库。
+ *
+ * 扫描页用它决定要不要挡住「开始统计」：词库外置之后没有内置兜底，
+ * 空词库跑出来的是一张只有单字的废表，还不如不让用户点。
+ */
+export async function libraryReady(): Promise<Result<boolean>> {
+  if (!isTauri()) return { ok: true, data: MOCK.libraryReady() };
+  return call<boolean>('library_ready');
+}
+
+/**
+ * 列出数据文件夹里的全部词库。
+ *
+ * ⚠ 后端会**完整读取并解析**每个 `.dict`（一份 jieba 词库约 50–100 ms，会算
+ * sha256）。界面按需调用并缓存结果，**别在每次重渲染时都调**。
+ */
+export async function dictList(): Promise<Result<DictItem[]>> {
+  if (!isTauri()) return { ok: true, data: MOCK.dictList() };
+  const res = await call<DictItem[]>('dict_list');
+  if (!res.ok) return res;
+  return { ok: true, data: res.data ?? [] };
+}
+
+/** 把一份 `.dict` 复制进数据文件夹；返回落地后的文件名（重名自动加后缀，绝不覆盖） */
+export async function dictImport(path: string): Promise<Result<string>> {
+  if (!isTauri()) return { ok: true, data: MOCK.dictImport(path) };
+  return call<string>('dict_import', { path });
+}
+
+/**
+ * 删掉一份词库（只删数据文件夹里那一个文件）。
+ *
+ * **没有任何权限等级**：后端没有 builtin 之类的权限位，「预置」只是个展示徽标。
+ * 但删掉被引用的词库会让那些表变成「词库缺失」，所以调用方必须先确认。
+ */
+export async function dictDelete(fileName: string): Promise<Result<null>> {
+  if (!isTauri()) {
+    MOCK.dictDelete(fileName);
+    return { ok: true, data: null };
+  }
+  return call<null>('dict_delete', { fileName });
+}
+
+/** 列出词表：数据文件夹里的全部 + 数据文件夹之外那张激活的（如果有） */
+export async function tableList(): Promise<Result<TableItem[]>> {
+  if (!isTauri()) return { ok: true, data: MOCK.tableList() };
+  const res = await call<TableItem[]>('table_list');
+  if (!res.ok) return res;
+  return { ok: true, data: res.data ?? [] };
+}
+
+/** 激活数据文件夹里的一张表；返回它的 meta（同时后端按记录的词库链重建分词器） */
+export async function activateLibraryTable(name: string): Promise<Result<Meta>> {
+  if (!isTauri()) return MOCK.activateLibraryTable(name);
+  const res = await call<Meta>('activate_library_table', { name });
+  if (!res.ok) return res;
+  if (!res.data) return { ok: false, error: t('bridge.noMeta') };
+  return { ok: true, data: res.data };
+}
+
+/**
+ * 删掉数据文件夹里的一张表（整个产物目录）。
+ *
+ * 只能删数据文件夹内的 —— 数据文件夹之外的目录不归我们管，界面对那些表
+ * （`TableItem.in_library === false`）也不给删除按钮。
+ */
+export async function tableDelete(name: string): Promise<Result<null>> {
+  if (!isTauri()) {
+    MOCK.tableDelete(name);
+    return { ok: true, data: null };
+  }
+  return call<null>('table_delete', { name });
+}
+
+/**
+ * 换**主词频表**：指定哪个作用域回答"这个词有多常见"。
+ *
+ * 粒度是全局的：划句分析、排行榜、分组阈值都必须跟着换，否则同一句话在两个页面
+ * 会显示成两种颜色。后端会重开一次数据集并把新的 meta 返回回来。
+ */
+export async function setPrimaryScope(scope: string): Promise<Result<Meta>> {
+  if (!isTauri()) {
+    const meta = MOCK.activeDataset();
+    if (!meta) return { ok: false, error: t('bridge.noMeta') };
+    if (!meta.tables.some((entry) => entry.path === scope)) {
+      return { ok: false, error: `演示数据里没有作用域「${scope}」` };
+    }
+    return { ok: true, data: meta };
+  }
+  const res = await call<Meta>('set_primary_scope', { scope });
+  if (!res.ok) return res;
+  if (!res.data) return { ok: false, error: t('bridge.noMeta') };
+  return { ok: true, data: res.data };
+}
+
+/**
+ * 把若干张表**相加**成一张新表（同一份产物目录里的另一个作用域）。
+ *
+ * 相加在数学上是精确的：`scan` 本身就是"逐作用域扫完再累加"，所以各作用域表相加
+ * 逐条等于全量扫描出来的那张表。新表与别的表完全平级 —— 能当主表、能再被相加。
+ */
+export async function composeTables(
+  params: ComposeParams
+): Promise<Result<ComposedTable[]>> {
+  if (!isTauri()) return { ok: true, data: MOCK.composeTables(params) };
+  return call<ComposedTable[]>('compose_tables', { params });
+}
+
+/**
+ * 给一张新表算默认的输出目录：`<数据文件夹>\tables\<洗过的名字>`。
+ *
+ * 扫描页用它预填输出路径，用户仍可改成任意位置（落到数据文件夹之外的产物目录
+ * 会以 `in_library: false` 出现在词表列表里，同样能用）。
+ */
+export async function suggestTableDir(name: string): Promise<Result<string>> {
+  if (!isTauri()) return { ok: true, data: MOCK.suggestTableDir(name) };
+  return call<string>('suggest_table_dir', { name });
+}
+
+/**
+ * 当前**已经打开**的那张表的 `meta`；没打开就是 null。
+ *
+ * 各页面开机都拿它来渲染，**不要再**自己拼 `settings.dataDir` 的路径：
+ * `dataDir` 现在是「数据文件夹」（里面是 `dicts\` 与 `tables\`），
+ * 它下面没有 `meta.json`，拼出来必然是 `exists: false`，于是每个页面都会显示
+ * 「尚未打开词频表」。后端在启动时已经按 `activeTable` / `activeTablePath`
+ * 打开过表了，这里直接取即可。
+ *
+ * `datasetStatus(dir)` / `openDataset(dir)` 仍然保留，它们的用途是
+ * 「用户手动指向数据文件夹之外的某份已有产物目录」。
+ */
+export async function activeDataset(): Promise<Result<Meta | null>> {
+  if (!isTauri()) return { ok: true, data: MOCK.activeDataset() };
+  const res = await call<Meta | null>('active_dataset');
+  if (!res.ok) return res;
+  return { ok: true, data: res.data ?? null };
+}
+
+/**
+ * 当前打开那张表的**产物目录绝对路径**。
+ *
+ * 后端没有一条命令直接给这个值，但 `library_info()` 的两个字段互斥地覆盖了两种情况：
+ * `active_table_path`（数据文件夹之外）优先，其次 `tables_dir\active_table`。
+ * 只用于展示（页面里显示"当前表在哪儿"）与按目录定位的命令（`tier_curve` 等）。
+ */
+export function activeTableDir(info: LibraryInfo | null | undefined): string | null {
+  if (!info) return null;
+  if (info.active_table_path) return info.active_table_path;
+  if (!info.active_table) return null;
+  return `${info.tables_dir.replace(/[\\/]+$/, '')}\\${info.active_table}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,12 +399,12 @@ function normalizeTokenList(raw: unknown): TokenInfo[] {
 export async function openDataset(dir: string): Promise<Result<Meta>> {
   if (!isTauri()) {
     const status = MOCK.datasetStatus(dir);
-    if (!status.meta) return { ok: false, error: '该目录不是有效的 VocTier 产物目录。' };
+    if (!status.meta) return { ok: false, error: t('bridge.invalidDatasetDir') };
     return { ok: true, data: status.meta };
   }
   const res = await call<Meta>('open_dataset', { dir });
   if (!res.ok) return res;
-  if (!res.data) return { ok: false, error: '后端没有返回产物元数据。' };
+  if (!res.data) return { ok: false, error: t('bridge.noMeta') };
   return { ok: true, data: res.data };
 }
 
@@ -232,13 +441,13 @@ export async function lookupWord(
 ): Promise<Result<WordHit>> {
   if (!isTauri()) {
     const hit = MOCK.lookupWord(word, kind);
-    if (!hit) return { ok: false, error: `语料库中未收录「${word}」` };
+    if (!hit) return { ok: false, error: t('bridge.wordNotInCorpus', { word }) };
     return { ok: true, data: hit };
   }
   // `Option<WordHit>`：未收录时后端可能返回 null（而不是 Err）
   const res = await call<WordHit | null>('lookup_word', { word, kind, dir: dir ?? null });
   if (!res.ok) return res;
-  if (!res.data) return { ok: false, error: `语料库中未收录「${word}」` };
+  if (!res.data) return { ok: false, error: t('bridge.wordNotInCorpus', { word }) };
   return { ok: true, data: res.data };
 }
 
@@ -360,26 +569,34 @@ export function defaultSettings(): Settings {
     corpusDir: null,
     dataDir: null,
     hotkey: 'Alt+Q',
-    popupWidth: 480,
-    popupHeight: 420,
+    popupWidth: 520,
+    popupHeight: 560,
     popupOpacity: 0.96,
     popupAlwaysOnTop: true,
     popupAutoCloseMs: 0,
     theme: 'system',
+    locale: 'zh-CN',
     threads: 0,
     hmm: true,
     keepDigit: true,
     keepLatin: true,
     skipSingleChar: false,
-    userDict: null,
+    // 词库链：null / 空数组 = 用数据文件夹里全部 `.dict`（按文件名排序）
+    scanDicts: null,
+    activeTable: null,
+    activeTablePath: null,
     minCount: 1,
     skipDomainTables: false,
-    // 表管理与分组自定义：null / 'rank' 表示「一切照 meta 默认」，行为与旧版本完全一致
+    // 全作用域平等：谁当"主表"由 primaryScope 决定，默认 full（没有 full 就用第一个）
+    primaryScope: null,
+    // `enabledTables` 已废弃（留着只为读老设置），新代码不再写它
     enabledTables: null,
-    tierMethod: 'rank',
+    // 分组默认按**前%**：排名绝对值跨表不可比，而任意作用域都能当主表
+    tierMethod: 'top_pct',
     tierWordBounds: null,
     tierCharBounds: null,
     tierCoverage: null,
+    tierPct: null,
   };
 }
 
@@ -402,7 +619,7 @@ export async function captureSelection(): Promise<Result<string>> {
 
 /** 打开 / 显示悬浮小窗并填入文本 */
 export async function openPopup(text: string): Promise<Result<null>> {
-  if (!isTauri()) return { ok: false, error: '浏览器预览模式下无法打开悬浮小窗。' };
+  if (!isTauri()) return { ok: false, error: t('bridge.popupUnavailable') };
   return call<null>('open_popup', { text });
 }
 
@@ -476,7 +693,7 @@ export async function hidePopup(): Promise<void> {
  * 小窗 → 主窗口的文本回传（见 `POPUP_REPLY_EVENT`）。
  */
 export async function emitPopupReply(text: string): Promise<Result<null>> {
-  if (!isTauri()) return { ok: false, error: '浏览器预览模式下没有主窗口可回传。' };
+  if (!isTauri()) return { ok: false, error: t('bridge.noMainWindow') };
   try {
     const { emit } = await import('@tauri-apps/api/event');
     await emit(POPUP_REPLY_EVENT, { text });
@@ -528,6 +745,40 @@ export async function onTheme(cb: (payload: { theme?: string } | null) => void):
 }
 
 // ---------------------------------------------------------------------------
+// 界面语言跨窗口同步（见 $lib/locale-sync.ts）
+// ---------------------------------------------------------------------------
+
+/** 界面语言广播事件名（主窗口 ↔ 悬浮小窗） */
+export const LOCALE_EVENT = 'voctier:locale';
+
+/**
+ * 把界面语言变化广播给**所有**窗口。与 `emitTheme` 同一套理由：
+ * 必须用全局 `emit`，`getCurrentWindow().emit()` 只发给自己。
+ */
+export async function emitLocale(locale: string): Promise<Result<null>> {
+  if (!isTauri()) return { ok: true, data: null };
+  try {
+    const { emit } = await import('@tauri-apps/api/event');
+    await emit(LOCALE_EVENT, { locale });
+    return { ok: true, data: null };
+  } catch (error) {
+    return { ok: false, error: toMessage(error) };
+  }
+}
+
+/**
+ * 订阅别的窗口广播来的界面语言。返回 Promise<UnlistenFn>，与 `onTheme` 同一套用法。
+ *
+ * 同样是广播，本窗口会收到自己的那条，调用方要自己比对当前值。
+ */
+export async function onLocale(
+  cb: (payload: { locale?: string } | null) => void
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<{ locale?: string }>(LOCALE_EVENT, (event) => cb(event.payload ?? null));
+}
+
+// ---------------------------------------------------------------------------
 // 剪贴板（复制按钮用；navigator.clipboard 在 WebView 里可用，失败时兜底）
 // ---------------------------------------------------------------------------
 
@@ -537,7 +788,7 @@ export async function copyText(text: string): Promise<Result<null>> {
       await navigator.clipboard.writeText(text);
       return { ok: true, data: null };
     }
-    return { ok: false, error: '当前环境不支持剪贴板写入。' };
+    return { ok: false, error: t('bridge.clipboardUnsupported') };
   } catch (error) {
     return { ok: false, error: toMessage(error) };
   }
@@ -548,8 +799,8 @@ export async function copyText(text: string): Promise<Result<null>> {
 // ---------------------------------------------------------------------------
 
 /** 选目录；用户取消返回 null */
-export async function pickDirectory(title = '选择目录'): Promise<Result<string | null>> {
-  if (!isTauri()) return { ok: false, error: NO_TAURI_HINT };
+export async function pickDirectory(title = t('bridge.pickDirectory')): Promise<Result<string | null>> {
+  if (!isTauri()) return { ok: false, error: noTauriHint() };
   try {
     const { open } = await import('@tauri-apps/plugin-dialog');
     const picked = await open({ directory: true, multiple: false, title });
@@ -559,12 +810,20 @@ export async function pickDirectory(title = '选择目录'): Promise<Result<stri
   }
 }
 
-/** 选文件；用户取消返回 null */
-export async function pickFile(title = '选择文件'): Promise<Result<string | null>> {
-  if (!isTauri()) return { ok: false, error: NO_TAURI_HINT };
+/** 选文件；用户取消返回 null。`filters` 用于限制扩展名（例如词库只认 `*.dict`） */
+export async function pickFile(
+  title = t('bridge.pickFile'),
+  filters?: { name: string; extensions: string[] }[]
+): Promise<Result<string | null>> {
+  if (!isTauri()) return { ok: false, error: noTauriHint() };
   try {
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const picked = await open({ directory: false, multiple: false, title });
+    const picked = await open({
+      directory: false,
+      multiple: false,
+      title,
+      ...(filters && filters.length > 0 ? { filters } : {}),
+    });
     return { ok: true, data: typeof picked === 'string' ? picked : null };
   } catch (error) {
     return { ok: false, error: toMessage(error) };
@@ -573,7 +832,7 @@ export async function pickFile(title = '选择文件'): Promise<Result<string | 
 
 /** 用系统默认程序打开路径 / URL（opener 插件） */
 export async function openExternal(target: string): Promise<Result<null>> {
-  if (!isTauri()) return { ok: false, error: NO_TAURI_HINT };
+  if (!isTauri()) return { ok: false, error: noTauriHint() };
   try {
     const { openUrl, openPath, revealItemInDir } = await import('@tauri-apps/plugin-opener');
     if (/^https?:\/\//i.test(target)) {
@@ -811,26 +1070,30 @@ function domainEntries(base: MockEntry[], domain: string, kind: 'word' | 'char')
 }
 
 function mockTableMeta(
-  path: string,
+  scope: string,
   kind: string,
   entries: MockEntry[],
   stats: TierStat[]
 ): TableMeta {
   const totalTokens = entries.reduce((sum, e) => sum + e.count, 0);
   return {
-    path,
+    // `path` 是**作用域名**（schema v3 起），不再是 `full/word` 那种路径
+    path: scope,
     kind,
     entries: entries.length,
     total_tokens: totalTokens,
     vfr_bytes: entries.length * 34 + 4096,
     tiers: mockTiers(kind === 'char' ? 'char' : 'word'),
     tier_stats: stats,
+    min_count: 1,
+    tier_pct: [...(kind === 'char' ? DEFAULT_CHAR_TIER_PCT : DEFAULT_WORD_TIER_PCT)],
+    source_tables: [],
   };
 }
 
 function buildMockMeta(corpusRoot: string): Meta {
   return {
-    schema_version: 1,
+    schema_version: 3,
     generated_at: '2024-05-01T09:30:00Z',
     tool_version: '0.1.0',
     corpus_root: corpusRoot,
@@ -839,8 +1102,8 @@ function buildMockMeta(corpusRoot: string): Meta {
       engine: 'jieba-rs',
       version: '0.7.4',
       hmm: true,
-      dict: 'jieba 内置词典',
-      user_dict: null,
+      // v2：词库链，dicts[0] 是主词库
+      dicts: [mockDictRef('jieba 主词库', MOCK_MAIN_DICT_ENTRIES, 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90')],
       min_len: 1,
       max_len: 20,
       keep_latin: true,
@@ -861,22 +1124,183 @@ function buildMockMeta(corpusRoot: string): Meta {
       bytes: [1_062_000_000, 402_000_000, 269_000_000, 61_000_000, 588_000_000, 130_000_000, 322_000_000][i] ?? 1_000_000,
     })),
     tables: [
-      mockTableMeta('full/word', 'word', MOCK_WORDS, mockTierStats(MOCK_WORDS, 'word')),
-      mockTableMeta('full/char', 'char', MOCK_CHARS, mockTierStats(MOCK_CHARS, 'char')),
+      mockTableMeta(FULL_SCOPE, 'word', MOCK_WORDS, mockTierStats(MOCK_WORDS, 'word')),
+      mockTableMeta(FULL_SCOPE, 'char', MOCK_CHARS, mockTierStats(MOCK_CHARS, 'char')),
       ...MOCK_DOMAIN_NAMES.flatMap((name) => {
         const words = domainEntries(MOCK_WORDS, name, 'word');
         const chars = domainEntries(MOCK_CHARS, name, 'char');
+        // 铺平之后每个作用域就是一个平级的目录名（不再有 domains/ 这一层）
         return [
-          mockTableMeta(`domains/${name}/word`, 'word', words, mockTierStats(words, 'word')),
-          mockTableMeta(`domains/${name}/char`, 'char', chars, mockTierStats(chars, 'char')),
+          mockTableMeta(name, 'word', words, mockTierStats(words, 'word')),
+          mockTableMeta(name, 'char', chars, mockTierStats(chars, 'char')),
         ];
       }),
     ],
     tier_names: ['极多', '很多', '较多', '中等', '较少', '很少', '极少'],
+    // 与后端一致：产物自带稳定标识，界面据此取色（不按组名取色）
+    tier_keys: [...TIER_KEYS],
   };
 }
 
 const MOCK_DIR = '(浏览器预览) 演示数据集';
+
+// ===========================================================================
+// 数据文件夹（词库库 / 词表库）的演示数据
+//
+// 目标：让浏览器预览里**所有状态都看得到**，而不是只走顺利路径：
+//   - 词库：一份正常的、一份 `error` 非空的坏文件、一份 `freq_zero > 0` 的隐患文件；
+//   - 词表：`binding.kind` 分别是 ok / legacy / drifted / missing，外加一张
+//     `in_library: false` 的外部表（那种表界面不给删除按钮）。
+//
+// 这些数据是**可变的**：导入 / 删除词库、激活 / 删除词表都要能在浏览器里点出来。
+// ===========================================================================
+
+/** 演示用的数据文件夹（和 Rust 侧默认位置同构：里面是 dicts\ 与 tables\） */
+const MOCK_LIB_ROOT = 'C:\\Users\\demo\\AppData\\Local\\com.voctier.desktop\\data';
+
+/** 主词库的有效词条数：给 mock meta 的 `dicts[]` 与 `report.entries` 共用 */
+const MOCK_MAIN_DICT_ENTRIES = 349_046;
+
+/** 造一条 `DictRef`；`file_name` + `root` 拼出 `path`，`sha256` 给固定值 */
+function mockDictRef(
+  name: string,
+  entries: number,
+  sha256: string,
+  file = '',
+  root = MOCK_LIB_ROOT
+): DictRef {
+  return {
+    id: name,
+    name,
+    path: `${root}\\dicts\\${file || `${name}.dict`}`,
+    entries,
+    sha256,
+  };
+}
+
+/** 演示用词库清单（`file_name` 就是 `dicts\` 下的文件名，也是 `dictFiles` 的取值） */
+let mockDicts: DictItem[] = [
+  {
+    dict: mockDictRef('jieba 主词库', MOCK_MAIN_DICT_ENTRIES, 'a1b2'.repeat(16), 'jieba 主词库.dict'),
+    error: null,
+    report: {
+      entries: MOCK_MAIN_DICT_ENTRIES,
+      comments: 42,
+      blanks: 3,
+      freq_omitted: 0,
+      freq_zero: 0,
+    },
+    file_name: 'jieba 主词库.dict',
+    origin: 'seeded',
+  },
+  {
+    // 隐患样本：显式写了 0 的词频 → 这些词永远切不出来
+    dict: mockDictRef('领域补充词', 1_284, 'b2c3'.repeat(16), '领域补充词.dict'),
+    error: null,
+    report: {
+      entries: 1_284,
+      comments: 12,
+      blanks: 1,
+      freq_omitted: 37,
+      freq_zero: 9,
+    },
+    file_name: '领域补充词.dict',
+    origin: 'imported',
+  },
+  {
+    // 坏文件样本：读不了，但**必须列出来**，否则用户只知道"我放进去了怎么没有"
+    dict: mockDictRef('手工整理.dict', 0, '', '手工整理.dict'),
+    error: '第 128 行不是合法的 jieba 词条（缺少词频列）',
+    report: { entries: 0, comments: 0, blanks: 0, freq_omitted: 0, freq_zero: 0 },
+    file_name: '手工整理.dict',
+    origin: 'unknown',
+  },
+];
+
+/** 演示用词表清单；`path` 是绝对路径，外部表落在数据文件夹之外 */
+const MOCK_TABLES_DIR = `${MOCK_LIB_ROOT}\\tables`;
+/** 数据文件夹之外那张演示表（`in_library: false`） */
+export const MOCK_EXTERNAL_TABLE_DIR = 'E:\\corpora\\voctier-out\\2024 汇总';
+
+let mockActiveTable: string | null = '演示全库表';
+
+/** 造一份词表列表项：`meta` 用 `buildMockMeta` 那份假产物 */
+function mockTableItem(
+  name: string,
+  opts: {
+    path?: string;
+    corpusRoot?: string;
+    generatedAt?: string;
+    binding?: Binding;
+    inLibrary?: boolean;
+    origin?: Origin;
+    error?: string | null;
+    active?: boolean;
+  } = {}
+): TableItem {
+  const inLibrary = opts.inLibrary ?? true;
+  const path = opts.path ?? (inLibrary ? `${MOCK_TABLES_DIR}\\${name}` : MOCK_EXTERNAL_TABLE_DIR);
+  const meta = buildMockMeta(opts.corpusRoot ?? 'D:\\corpus');
+  meta.generated_at = opts.generatedAt ?? meta.generated_at;
+  return {
+    name,
+    path,
+    meta,
+    error: opts.error ?? null,
+    binding: opts.binding ?? { kind: 'ok' },
+    active: opts.active ?? mockActiveTable === name,
+    in_library: inLibrary,
+    origin: opts.origin ?? (inLibrary ? 'scanned' : 'unknown'),
+  };
+}
+
+/** 演示词表：覆盖 ok / legacy / drifted / missing 四种绑定 + 一张外部表 */
+function buildMockTableList(): TableItem[] {
+  return [
+    mockTableItem('演示全库表', {
+      generatedAt: '2024-05-01T09:30:00Z',
+      binding: { kind: 'ok' },
+      origin: 'scanned',
+    }),
+    mockTableItem('2023 老产物', {
+      generatedAt: '2023-11-08T14:02:00Z',
+      binding: { kind: 'legacy' },
+      origin: 'unknown',
+    }),
+    mockTableItem('新闻语料 v2', {
+      corpusRoot: 'D:\\corpus\\news',
+      generatedAt: '2024-06-11T18:45:00Z',
+      binding: { kind: 'drifted', changed: ['领域补充词'] },
+      origin: 'scanned',
+    }),
+    mockTableItem('论坛语料', {
+      corpusRoot: 'D:\\corpus\\forum',
+      generatedAt: '2024-04-02T07:12:00Z',
+      binding: { kind: 'missing', missing: ['旧版主词库'] },
+      origin: 'imported',
+    }),
+    mockTableItem('外部汇总表', {
+      corpusRoot: 'E:\\corpora\\raw',
+      generatedAt: '2024-02-20T11:05:00Z',
+      binding: { kind: 'ok' },
+      inLibrary: false,
+      origin: 'unknown',
+    }),
+  ];
+}
+
+let mockTables: TableItem[] = buildMockTableList();
+
+/** 把用户给的表名洗成安全的目录名（`sanitize_table_name` 的前端等价） */
+function sanitizeMockTableName(raw: string): string {
+  let s = raw
+    .trim()
+    .replace(/[<>:"/\\|?*]/g, '_')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f]/g, '_');
+  while (s.endsWith('.') || s.endsWith(' ')) s = s.slice(0, -1);
+  return s || '未命名';
+}
 
 /** 用小窗 / 划句页共用的「首次取词」模拟 */
 let mockPendingTaken = false;
@@ -989,17 +1413,26 @@ function mockTokenize(text: string, domains: string[]): TokenInfo[] {
       ? MOCK_CHARS.reduce((sum, e) => sum + e.count, 0)
       : MOCK_WORDS.reduce((sum, e) => sum + e.count, 0);
 
-    const domainRanks: [string, number | null][] = [];
+    const domainRanks: TableRank[] = [];
     if (accepted) {
       for (const name of domainFilter) {
         const source = singleCjk
           ? domainEntries(MOCK_CHARS, name, 'char')
           : domainEntries(MOCK_WORDS, name, 'word');
         const hit = source.find((w) => w.word === piece);
-        domainRanks.push([name, hit ? hit.rank : null]);
+        const kind = singleCjk ? 'char' : 'word';
+        domainRanks.push({
+          scope: name,
+          kind,
+          rank: hit ? hit.rank : null,
+          top_pct: hit ? pctForRank(hit.rank, source.length) : null,
+          entries: source.length,
+          count: hit ? hit.count : null,
+        });
       }
     }
 
+    const entries = singleCjk ? MOCK_CHARS.length : MOCK_WORDS.length;
     tokens.push({
       text: piece,
       byte_start: offset,
@@ -1010,11 +1443,13 @@ function mockTokenize(text: string, domains: string[]): TokenInfo[] {
       count: entry ? entry.count : null,
       rank: entry ? entry.rank : null,
       pct: entry ? (entry.count * 100) / totalTokens : null,
+      top_pct: entry ? pctForRank(entry.rank, entries) : null,
+      entries: entry ? entries : null,
       tier: entry ? entry.tier : null,
       tier_name: entry ? (singleCjk ? charTiers : wordTiers)[entry.tier].name : null,
       in_dict: accepted ? true : null,
       from_user: accepted ? false : null,
-      domain_ranks: domainRanks,
+      table_ranks: domainRanks,
     });
     offset += new TextEncoder().encode(piece).length;
   }
@@ -1034,25 +1469,30 @@ const MOCK = {
       corpusDir: 'D:\\corpus',
       dataDir: MOCK_DIR,
       hotkey: 'Alt+Q',
-      popupWidth: 480,
-      popupHeight: 420,
+      popupWidth: 520,
+      popupHeight: 560,
       popupOpacity: 0.96,
       popupAlwaysOnTop: true,
       popupAutoCloseMs: 0,
       theme: 'system',
+      locale: 'zh-CN',
       threads: 0,
       hmm: true,
       keepDigit: true,
       keepLatin: true,
       skipSingleChar: false,
-      userDict: null,
+      scanDicts: ['jieba 主词库.dict', '领域补充词.dict'],
+      activeTable: '演示全库表',
+      activeTablePath: null,
       minCount: 1,
       skipDomainTables: false,
+      primaryScope: FULL_SCOPE,
       enabledTables: null,
-      tierMethod: 'rank',
+      tierMethod: 'top_pct',
       tierWordBounds: null,
       tierCharBounds: null,
       tierCoverage: null,
+      tierPct: null,
     } satisfies Settings),
   } as Settings,
 
@@ -1077,6 +1517,96 @@ const MOCK = {
     return { dir: dir || MOCK_DIR, exists: true, meta: buildMockMeta(dir || 'D:\\corpus') };
   },
 
+  /** 当前"已打开"的表：演示里就是 `mockActiveTable` 那张 */
+  activeDataset(): Meta | null {
+    const item = mockTables.find((table) => table.name === mockActiveTable);
+    return item?.meta ?? null;
+  },
+
+  // ------------------------------------------------------------ 数据文件夹
+
+  libraryInfo(): LibraryInfo {
+    const active = mockTables.find((table) => table.active) ?? null;
+    return {
+      root: MOCK_LIB_ROOT,
+      dicts_dir: `${MOCK_LIB_ROOT}\\dicts`,
+      tables_dir: MOCK_TABLES_DIR,
+      is_default: true,
+      active_table: mockActiveTable,
+      active_table_path: active && !active.in_library ? active.path : null,
+      active_binding: active?.binding ?? null,
+      active_warnings:
+        active && active.binding.kind === 'legacy'
+          ? ['这是 v1 老产物：没有词库指纹，词库一致性无从校验。']
+          : [],
+    };
+  },
+
+  setDataDir(dir: string): LibraryInfo {
+    // 真实后端只建目录、不搬内容，并且会清掉「当前激活的表」
+    mockActiveTable = null;
+    for (const table of mockTables) table.active = false;
+    const info = MOCK.libraryInfo();
+    return { ...info, root: dir, dicts_dir: `${dir}\\dicts`, tables_dir: `${dir}\\tables` };
+  },
+
+  libraryReady(): boolean {
+    return mockDicts.some((item) => item.error === null);
+  },
+
+  dictList(): DictItem[] {
+    return mockDicts.map((item) => ({ ...item }));
+  },
+
+  dictImport(path: string): string {
+    const base = path.split(/[\\/]/).pop() ?? 'imported.dict';
+    const stem = base.replace(/\.dict$/i, '') || 'imported';
+    let name = `${stem}.dict`;
+    let n = 2;
+    while (mockDicts.some((item) => item.file_name === name)) {
+      name = `${stem} (${n}).dict`;
+      n += 1;
+    }
+    // 导入的演示词库一律是"正常"的，带一点点隐患让列表有内容可看
+    mockDicts = [
+      ...mockDicts,
+      {
+        dict: mockDictRef(stem, 512, 'c3d4'.repeat(16), name),
+        error: null,
+        report: { entries: 512, comments: 4, blanks: 0, freq_omitted: 6, freq_zero: 0 },
+        file_name: name,
+        origin: 'imported',
+      },
+    ];
+    return name;
+  },
+
+  dictDelete(fileName: string) {
+    mockDicts = mockDicts.filter((item) => item.file_name !== fileName);
+  },
+
+  tableList(): TableItem[] {
+    return mockTables.map((table) => ({ ...table, active: table.name === mockActiveTable }));
+  },
+
+  activateLibraryTable(name: string): Result<Meta> {
+    const item = mockTables.find((table) => table.name === name);
+    if (!item) return { ok: false, error: `数据文件夹里没有表「${name}」` };
+    if (!item.meta) return { ok: false, error: item.error ?? t('bridge.noMeta') };
+    mockActiveTable = name;
+    for (const table of mockTables) table.active = table.name === name;
+    return { ok: true, data: item.meta };
+  },
+
+  tableDelete(name: string) {
+    mockTables = mockTables.filter((table) => table.name !== name);
+    if (mockActiveTable === name) mockActiveTable = null;
+  },
+
+  suggestTableDir(name: string): string {
+    return `${MOCK_TABLES_DIR}\\${sanitizeMockTableName(name)}`;
+  },
+
   analyzeText(text: string, domains: string[]): TokenInfo[] {
     if (!text.trim()) return [];
     return mockTokenize(text, domains);
@@ -1096,6 +1626,9 @@ const MOCK = {
       tier: entry.tier,
       tier_name: tiers[entry.tier].name,
       pct: (entry.count * 100) / total,
+      top_pct: pctForRank(entry.rank, base.length),
+      entries: base.length,
+      scope: FULL_SCOPE,
       in_dict: true,
     };
   },
@@ -1103,9 +1636,17 @@ const MOCK = {
   listRank(domain: string | null, kind: 'word' | 'char', from: number, limit: number): RankRow[] {
     const base = kind === 'char' ? MOCK_CHARS : MOCK_WORDS;
     const source = domain ? domainEntries(base, domain, kind) : base;
+    const total = Math.max(1, source.reduce((sum, e) => sum + e.count, 0));
     return source
       .slice(Math.max(0, from - 1), Math.max(0, from - 1) + limit)
-      .map((entry) => ({ rank: entry.rank, word: entry.word, count: entry.count, flags: 1 }));
+      .map((entry) => ({
+        rank: entry.rank,
+        word: entry.word,
+        count: entry.count,
+        flags: 1,
+        top_pct: pctForRank(entry.rank, source.length),
+        pct: (entry.count * 100) / total,
+      }));
   },
 
   /**
@@ -1115,13 +1656,15 @@ const MOCK = {
    */
   tierCurve(path: string, maxPoints: number): TierCurve {
     const meta = buildMockMeta('D:\\corpus');
+    const { scope, kind: wantKind } = splitTableKey(path);
     const table =
-      meta.tables.find((entry) => entry.path === path) ??
-      meta.tables.find((entry) => entry.path.endsWith(`/${path.split('/').pop()}`)) ??
+      meta.tables.find((entry) => entry.path === scope && entry.kind === wantKind) ??
+      meta.tables.find((entry) => entry.kind === wantKind) ??
       meta.tables[0];
     const kind: 'word' | 'char' = table.kind === 'char' ? 'char' : 'word';
     const base = kind === 'char' ? MOCK_CHARS : MOCK_WORDS;
-    const domain = table.path.startsWith('domains/') ? table.path.split('/')[1] : null;
+    // 非 full 的作用域 = 分域演示数据（铺平之后作用域名就是子目录名）
+    const domain = table.path === FULL_SCOPE ? null : table.path;
     const entries = domain ? domainEntries(base, domain, kind) : base;
 
     const total = Math.max(1, entries.reduce((sum, entry) => sum + entry.count, 0));
@@ -1134,7 +1677,9 @@ const MOCK = {
 
     const n = entries.length;
     const points: [number, number][] = [];
-    if (n === 0) return { path: table.path, kind, entries: 0, total_tokens: 0, points };
+    if (n === 0) {
+      return { path: tableKey(table.path, table.kind), kind, entries: 0, total_tokens: 0, points };
+    }
     const cap = Math.max(8, Math.min(4000, maxPoints));
     const decades = Math.max(1, Math.log10(n));
     const perDecade = Math.max(2, cap / decades);
@@ -1147,16 +1692,63 @@ const MOCK = {
     if (targets[targets.length - 1] !== n) targets.push(n);
     for (const rank of targets) points.push([rank, cumulative[rank - 1]]);
 
-    return { path: table.path, kind, entries: n, total_tokens: total, points };
+    return {
+      path: tableKey(table.path, table.kind),
+      kind,
+      entries: n,
+      total_tokens: total,
+      points,
+    };
   },
 
   searchWords(query: string, kind: 'word' | 'char', limit: number): RankRow[] {
     if (!query) return [];
     const base = kind === 'char' ? MOCK_CHARS : MOCK_WORDS;
+    const total = Math.max(1, base.reduce((sum, e) => sum + e.count, 0));
     return base
       .filter((entry) => entry.word.startsWith(query))
       .slice(0, limit)
-      .map((entry) => ({ rank: entry.rank, word: entry.word, count: entry.count, flags: 1 }));
+      .map((entry) => ({
+        rank: entry.rank,
+        word: entry.word,
+        count: entry.count,
+        flags: 1,
+        top_pct: pctForRank(entry.rank, base.length),
+        pct: (entry.count * 100) / total,
+      }));
+  },
+
+  /**
+   * 演示「相加」：不写任何文件，只往当前演示产物的 `tables` 里追加一条记录，
+   * 让界面上的新作用域、可设为主表、来源标记这些都能点出来。
+   */
+  composeTables(params: ComposeParams): ComposedTable[] {
+    const meta = MOCK.activeDataset();
+    if (!meta) return [];
+    const kind: 'word' | 'char' = params.kind === 'char' ? 'char' : 'word';
+    const sources = params.sources.filter((s) => splitTableKey(s).kind === kind);
+    if (sources.length === 0) return [];
+    const scope = params.scope.trim() || '相加';
+    const base = kind === 'char' ? MOCK_CHARS : MOCK_WORDS;
+    const total = base.reduce((sum, e) => sum + e.count, 0) * sources.length;
+    const already = meta.tables.some((t) => t.path === scope && t.kind === kind);
+    if (already) return [];
+    meta.tables.push(mockTableMeta(scope, kind, base, mockTierStats(base, kind)));
+    const added = meta.tables[meta.tables.length - 1];
+    added.total_tokens = total;
+    added.source_tables = [...sources];
+    return [
+      {
+        out: MOCK_DIR,
+        scope,
+        kind,
+        entries: base.length,
+        total_tokens: total,
+        bytes: added.vfr_bytes,
+        sources,
+        elapsed_ms: 1200,
+      },
+    ];
   },
 
   onProgress(handler: ProgressHandler): () => void {

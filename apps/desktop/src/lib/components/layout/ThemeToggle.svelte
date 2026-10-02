@@ -6,13 +6,13 @@
    * 并把样式对齐成本拉高。后续要换成 bits-ui DropdownMenu 也很简单。
    */
   import { cn } from '$lib/utils';
-  import { THEME_LABELS, setTheme, theme, type ThemeMode } from '$lib/theme.svelte';
+  import { setTheme, theme, themeLabel, type ThemeMode } from '$lib/theme.svelte';
   import IconSun from '$lib/components/icons/IconSun.svelte';
   import IconMoon from '$lib/components/icons/IconMoon.svelte';
 
   const MODES: ThemeMode[] = ['light', 'dark', 'system'];
 
-  const label = $derived(THEME_LABELS[theme.mode]);
+  const label = $derived(themeLabel(theme.mode));
 </script>
 
 <details class="group relative">
@@ -47,7 +47,7 @@
         )}
         onclick={() => setTheme(mode)}
       >
-        <span>{THEME_LABELS[mode]}</span>
+        <span>{themeLabel(mode)}</span>
         {#if mode === theme.mode}
           <span class="text-primary">✓</span>
         {/if}

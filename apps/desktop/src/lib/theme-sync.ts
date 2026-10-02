@@ -22,7 +22,8 @@
  */
 import { on } from './events';
 import { emitTheme, onTheme, THEME_EVENT } from './api/bridge';
-import { applyTheme, theme, THEME_LABELS, type ThemeMode } from './theme.svelte';
+import { applyTheme, theme, themeLabel, type ThemeMode } from './theme.svelte';
+import { t } from './i18n.svelte';
 
 /** 与 Rust 侧 / 另一个窗口对齐的 localStorage key（见 theme.svelte.ts） */
 const STORAGE_KEY = 'voctier-theme';
@@ -79,7 +80,10 @@ export function nextThemeMode(mode: ThemeMode): ThemeMode {
 
 /** 供按钮 title 用：`深色（点击切到浅色）` */
 export function themeToggleHint(mode: ThemeMode): string {
-  return `${THEME_LABELS[mode]}（点击切到${THEME_LABELS[nextThemeMode(mode)]}）`;
+  return t('theme.toggleHint', {
+    current: themeLabel(mode),
+    next: themeLabel(nextThemeMode(mode)),
+  });
 }
 
 /** 事件名转导出，方便测试与对照 */

@@ -1,18 +1,35 @@
 /**
  * 展示层的格式化小工具（体量、数字、百分比、时间）。
  *
- * 全部是纯函数，页面里直接 import 使用，避免每个页面各写一份 toFixed。
+ * ## 纯度约定（接入 i18n 后新增，别破坏）
+ *
+ *   - **计算**类函数保持纯函数：`boundsInfo` / `effectiveBounds` / `rankForCoverage` /
+ *     `tierIndexFromBounds` / `tiersOfTable` … 一律**不读界面语言、不调 `t()`**。
+ *     它们被大量 `$derived` 调用、也被非组件代码复用；一旦读全局状态，返回值就会随
+ *     语言变化，缓存与等价性判断全部失效。需要提示用户时返回**错误码**
+ *     （`BoundsInfo.warning` 就是 `{ key, params }`），由展示层去 `t()`。
+ *   - **格式化**类函数（`formatDuration` / `formatMaxRank`）属于展示层，可以读 `t()`：
+ *     它们是响应式读点，切换语言会自动重算。
+ *
+ * 千分位与小数点分隔符在 `zh-CN` 与 `en` 下完全一致，所以数字格式化统一走
+ * `./number-locale`（唯一一处常量），换语言时要动的地方只有一个。
  */
 
 import {
+  defaultTierPct,
+  FULL_SCOPE,
   isTierMethod,
   TIER_BOUND_COUNT,
   TIER_COUNT,
+  type BoundsWarning,
   type Meta,
   type Settings,
+  type TableMeta,
   type TierCurve,
   type TierMethod,
 } from './types';
+import { t } from './i18n.svelte';
+import { formatCount, NUMBER_LOCALE } from './number-locale';
 
 /** 1024 进制体积；自动选单位 */
 export function formatBytes(bytes: number | null | undefined, digits = 1): string {
@@ -32,13 +49,13 @@ export function formatBytes(bytes: number | null | undefined, digits = 1): strin
 /** 千分位整数 */
 export function formatInt(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return Math.round(n).toLocaleString('zh-CN');
+  return formatCount(n);
 }
 
 /** 千分位小数（用于词条数这类可能是浮点的场景） */
 export function formatNumber(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return n.toLocaleString(NUMBER_LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 /**
@@ -91,17 +108,17 @@ export function formatTopPercent(value: number | null | undefined): string {
   return `${formatNumber(value, digits)}%`;
 }
 
-/** 毫秒 → 「1 分 23 秒」/「820 毫秒」 */
+/** 毫秒 → 「1 分 23 秒」/「820 毫秒」（展示层，随界面语言变） */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
-  if (ms < 1000) return `${Math.round(ms)} 毫秒`;
+  if (ms < 1000) return t('format.durationMs', { value: Math.round(ms) });
   const totalSeconds = ms / 1000;
-  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} 秒`;
+  if (totalSeconds < 60) return t('format.durationSec', { value: totalSeconds.toFixed(1) });
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = Math.round(totalSeconds % 60);
-  if (minutes < 60) return `${minutes} 分 ${seconds} 秒`;
+  if (minutes < 60) return t('format.durationMinSec', { minutes, seconds });
   const hours = Math.floor(minutes / 60);
-  return `${hours} 小时 ${minutes % 60} 分`;
+  return t('format.durationHourMin', { hours, minutes: minutes % 60 });
 }
 
 /** "2024-05-01T09:30:00Z" → "2024-05-01 09:30:00"（不做时区换算，避免引入依赖） */
@@ -114,7 +131,7 @@ export function formatTimestamp(iso: string | null | undefined): string {
 
 /** 把 u64::MAX 之类的哨兵值显示成「∞ / 以上」 */
 export function formatMaxRank(maxRank: number): string {
-  if (!Number.isFinite(maxRank) || maxRank >= 1e18) return '以上全部';
+  if (!Number.isFinite(maxRank) || maxRank >= 1e18) return t('format.allAbove');
   return formatInt(maxRank);
 }
 
@@ -128,38 +145,92 @@ export function clampPercent(value: number | null | undefined): number {
 // 结果表辅助（阈值一律从 meta 里读，绝不硬编码分组边界）
 // ---------------------------------------------------------------------------
 
-/** 从 meta 里找到某张表（默认全库词表） */
+/** 从 meta 里找到某张表（默认主作用域的词表） */
 export function findTable<T extends { path: string; kind: string }>(
   tables: T[],
   kind: 'word' | 'char' = 'word',
-  prefix = 'full/'
+  scope = FULL_SCOPE
 ): T | undefined {
   return (
-    tables.find((table) => table.path === `${prefix}${kind}`) ??
-    tables.find((table) => table.path.endsWith(`/${kind}`))
+    tables.find((table) => table.path === scope && table.kind === kind) ??
+    tables.find((table) => table.kind === kind)
   );
 }
 
 /** 取某张表的分组阈值；表不存在时回落到任意一张同 kind 的表 */
 export function tiersOfTable(
   tables: { path: string; kind: string; tiers: { name: string; max_rank: number }[] }[],
-  kind: 'word' | 'char' = 'word'
+  kind: 'word' | 'char' = 'word',
+  scope?: string
 ): { name: string; max_rank: number }[] {
-  const table = findTable(tables, kind);
+  const table = scope
+    ? tables.find((t) => t.path === scope && t.kind === kind)
+    : findTable(tables, kind);
   if (table) return table.tiers;
   const fallback = tables.find((t) => t.kind === kind);
   return fallback?.tiers ?? [];
 }
 
-/** 分组名 → 该组的阈值（找不到返回 null） */
+/**
+ * 前% → 排名上界（含）。与 Rust 侧 `rank::rank_for_pct` **必须等价**（都取 `ceil`）。
+ *
+ * 取整方向不能改成 `floor`：判前%要拿边界条目自己的前%去比，`ceil` 才不会把边界
+ * 那一条推到下一档；`floor` 还会在条目少时把六档压成同一个排名。
+ *
+ * 空表返回 0 —— 调用方要能看出"这张表没有条目，别拿百分比切它"。
+ */
+export function rankForPct(pct: number, entries: number): number {
+  if (!(entries > 0) || !Number.isFinite(pct) || pct <= 0) return 0;
+  return Math.max(1, Math.ceil((pct / 100) * entries));
+}
+
+/** 排名 → 前%（0..100）。`entries` 是**条目数**，不是 token 数。 */
+export function pctForRank(rank: number, entries: number): number {
+  if (!(entries > 0) || !Number.isFinite(rank)) return 0;
+  return (rank * 100) / entries;
+}
+
+/**
+ * 把 6 个前%上界换算成严格递增的 6 个排名上界。
+ *
+ * 与 Rust 侧 `rank::ranks_from_pct` 等价。空表返回 6 个 1（**不能返回空数组**：
+ * 缺了前 6 个上界，七组就只剩"以上全部"一组，组号到配色的映射会整体错位）。
+ */
+export function ranksFromPct(pcts: readonly number[], entries: number): number[] {
+  if (!(entries > 0)) return pcts.map(() => 1);
+  const out: number[] = [];
+  for (const p of pcts) {
+    let r = rankForPct(p, entries);
+    const prev = out[out.length - 1];
+    if (prev !== undefined && r <= prev) r = prev + 1;
+    out.push(r);
+  }
+  return out;
+}
+
+/** 某张表实际生效的 6 个前%上界（产物里没记就用该类型的默认口径） */
+export function tierPctOfTable(
+  table: { kind: string; tier_pct?: number[] } | undefined,
+  kind: 'word' | 'char'
+): number[] {
+  const pct = table?.tier_pct;
+  if (pct && pct.length === TIER_BOUND_COUNT) return [...pct];
+  return defaultTierPct(kind);
+}
+
+/**
+ * 组号 → 该组的排名上界（越界 / 没有这张表时返回 null）。
+ *
+ * 按**组号**取，不按组名取：组名是文案（将来会随界面语言变化），不能当身份。
+ */
 export function tierMaxRank(
   tables: { path: string; kind: string; tiers: { name: string; max_rank: number }[] }[],
-  tierName: string | null,
+  tierIndex: number | null,
   kind: 'word' | 'char' = 'word'
 ): number | null {
-  if (!tierName) return null;
-  const found = tiersOfTable(tables, kind).find((tier) => tier.name === tierName);
-  return found ? found.max_rank : null;
+  if (tierIndex === null || !Number.isInteger(tierIndex) || tierIndex < 0) return null;
+  const tiers = tiersOfTable(tables, kind);
+  return tiers[tierIndex]?.max_rank ?? null;
 }
 
 /**
@@ -178,15 +249,16 @@ export function tierIndexOfRank(
 }
 
 // ---------------------------------------------------------------------------
-// 分组阈值（表开关 + 分组自定义的**唯一权威实现**）
+// 分组阈值（主作用域 + 分组自定义的**唯一权威实现**）
 //
 // 后端返回的 `token.tier` / `word_hit.tier` 一律按 meta 里的默认阈值算，
 // 用户自定义阈值只在设置里。所以「这个排名属于第几组」必须由这里统一回答，
 // 所有渲染分组的地方（TokenChips / TokenDetail / TierLegend / 排行榜）都走
 // `tierIndexFor`，不要再去读 token.tier。
 //
-// 用户的「启用表」设置只影响分域对比与排行榜（后端 analyze_text 里过滤），
-// 与分组阈值无关，因此本区块不读 enabledTables。
+// 阈值取自**主作用域**那张表：铺平之后任意作用域都能当主表，写死 `full/word`
+// 会让颜色与详情面板里的前%对不上。`tableKey` 参数不给时由调用方
+// （`tiers.svelte.ts::primaryTableKey`）补上。
 // ---------------------------------------------------------------------------
 
 /** 曲线里 log10 插值的浮点误差容限（与 Rust 侧 rank_for_coverage 保持一致） */
@@ -224,20 +296,37 @@ function ascendingCoverage(values: readonly number[] | null | undefined): number
   return out;
 }
 
-/** 用户没填 / 填得不合法时的兜底：取 meta 里全库表的默认阈值 */
-function defaultBounds(meta: Meta, kind: 'word' | 'char'): number[] {
-  const tiers = tiersOfTable(meta.tables, kind);
+/** 6 个前%上界必须都在 (0,100) 且严格递增 */
+function ascendingPct(values: readonly number[] | null | undefined): number[] | null {
+  if (!values || values.length !== TIER_BOUND_COUNT) return null;
   const out: number[] = [];
-  for (let i = 0; i < TIER_BOUND_COUNT; i += 1) {
-    const rank = tiers[i]?.max_rank;
-    // 后端缺这一档时用「上一档 ×10」外推，保证严格递增
-    out.push(
-      Number.isFinite(rank) && rank >= 1
-        ? Math.round(rank)
-        : Math.max(1, Math.round((out[i - 1] ?? 1) * 10))
-    );
+  for (const value of values) {
+    if (!Number.isFinite(value) || value <= 0 || value >= 100) return null;
+    out.push(value);
+  }
+  for (let i = 1; i < out.length; i += 1) {
+    if (out[i] <= out[i - 1]) return null;
   }
   return out;
+}
+
+/**
+ * 兜底阈值：**该表自己的前%口径**换算出来的排名上界。
+ *
+ * 不能拿"别的表的绝对阈值"当兜底 —— 那些数字是为另一张表的规模校准的，
+ * 套到这张表上会让整片词条挤进同一档。
+ */
+function defaultBounds(meta: Meta, kind: 'word' | 'char', tableKey?: string): number[] {
+  const table = resolveTable(meta, kind, tableKey);
+  return tableBounds(table, kind);
+}
+
+/** 用一张具体表算兜底阈值（产物里没记的前%上界就用该类型的默认口径） */
+export function tableBounds(
+  table: { kind: string; entries?: number; tier_pct?: number[] } | undefined,
+  kind: 'word' | 'char'
+): number[] {
+  return ranksFromPct(tierPctOfTable(table, kind), table?.entries ?? 0);
 }
 
 /** 把 6 个上界补成 7 个 `{name, max_rank}`（第 7 组 = 以上全部） */
@@ -301,11 +390,12 @@ export function defaultCoverageTargets(meta: Meta, kind: 'word' | 'char'): numbe
 /**
  * 算出某张表实际生效的 6 个排名上界（第 7 组为无穷）。
  *
- *   - `rank`：`settings.tierWordBounds ??` meta 里全库表的默认阈值（字表同理）；
+ *   - `top_pct`（**默认**）：`settings.tierPct ??` 产物里那张表的 `tier_pct`，
+ *     再由**该表的条目数**换算成排名上界。这是唯一与表规模无关的口径；
+ *   - `rank`：`settings.tierWordBounds ??` meta 里默认表的绝对阈值（字表同理）；
  *   - `coverage`：把 `settings.tierCoverage` 的 6 个目标经 `curves` 反解成排名上界
  *     （在 log10(rank) 上插值）；
- *   - `even`：`[1..6].map(k => round(entries * k / 7))`，`entries` 优先取
- *     `tablePath` 指向的那张表，其次取该 kind 的全库表；
+ *   - `even`：`[1..6].map(k => round(entries * k / 7))`；
  *   - 三种方式都必须得到**严格递增**的 6 个整数，否则回退到默认阈值
  *     （`boundsInfo` 会同时给出警告文案，界面据此提示）。
  */
@@ -314,16 +404,41 @@ export function effectiveBounds(
   meta: Meta,
   settings: Settings,
   curves?: Record<string, TierCurve>,
-  tablePath?: string
+  tableKey?: string
 ): number[] {
-  return boundsInfo(kind, meta, settings, curves, tablePath).bounds;
+  return boundsInfo(kind, meta, settings, curves, tableKey).bounds;
 }
 
 export type BoundsInfo = {
   bounds: number[];
-  /** 非空 = 用户填的值不合法，已回退到默认阈值 */
-  warning: string;
+  /**
+   * 非 null = 用户填的值不合法，已回退到默认阈值。
+   *
+   * 是**错误码**（`{ key, params }`）而不是文案：本函数保持纯计算，不读界面语言。
+   * 展示层写 `t(warning.key, warning.params)`。
+   */
+  warning: BoundsWarning | null;
 };
+
+/** 按表身份（`作用域/类型`）取那张 `TableMeta`；给不出来就回落该 kind 的第一张 */
+function resolveTable(
+  meta: Meta,
+  kind: 'word' | 'char',
+  tableKey?: string
+): TableMeta | undefined {
+  if (tableKey) {
+    const hit = meta.tables.find(
+      (entry) => tableKeyOf(entry) === tableKey || entry.path === tableKey
+    );
+    if (hit) return hit;
+  }
+  return findTable(meta.tables, kind);
+}
+
+/** `TableMeta` → 表身份字符串 */
+export function tableKeyOf(table: { path: string; kind: string }): string {
+  return `${table.path}/${table.kind}`;
+}
 
 /** `effectiveBounds` 的完整形态：顺带告诉界面有没有回退 */
 export function boundsInfo(
@@ -331,22 +446,38 @@ export function boundsInfo(
   meta: Meta,
   settings: Settings,
   curves?: Record<string, TierCurve>,
-  tablePath?: string
+  tableKey?: string
 ): BoundsInfo {
-  const fallback = defaultBounds(meta, kind);
-  const method: TierMethod = isTierMethod(settings.tierMethod) ? settings.tierMethod : 'rank';
-  const table =
-    (tablePath ? meta.tables.find((entry) => entry.path === tablePath) : undefined) ??
-    findTable(meta.tables, kind);
+  const fallback = defaultBounds(meta, kind, tableKey);
+  // 老设置里可能存着 `rank`；它仍然可用（绝对排名口径没删掉），只是不再是默认。
+  const method: TierMethod = isTierMethod(settings.tierMethod) ? settings.tierMethod : 'top_pct';
+  const table = resolveTable(meta, kind, tableKey);
+
+  if (method === 'top_pct') {
+    const entries = table?.entries ?? 0;
+    const custom = settings.tierPct;
+    // 优先级：用户填的 → 产物里这张表记的 → 该类型的默认口径
+    const pct = ascendingPct(custom) ?? tierPctOfTable(table, kind);
+    const solved = ranksFromPct(pct, entries);
+    const ok = ascendingInts(solved);
+    if (ok) return { bounds: ok, warning: null };
+    if (custom && !ascendingPct(custom)) {
+      return { bounds: fallback, warning: { key: 'bounds.invalidPct', params: { count: TIER_BOUND_COUNT } } };
+    }
+    return { bounds: fallback, warning: null };
+  }
 
   if (method === 'rank') {
     const custom = settings[kind === 'word' ? 'tierWordBounds' : 'tierCharBounds'];
-    if (!custom) return { bounds: fallback, warning: '' };
+    if (!custom) return { bounds: fallback, warning: null };
     const ok = ascendingInts(custom);
-    if (ok) return { bounds: ok, warning: '' };
+    if (ok) return { bounds: ok, warning: null };
     return {
       bounds: fallback,
-      warning: `${kind === 'word' ? '词表' : '字表'}阈值必须是非负整数、严格递增、共 ${TIER_BOUND_COUNT} 个，已临时回退到 meta 默认值。`,
+      warning: {
+        key: kind === 'word' ? 'bounds.invalidWord' : 'bounds.invalidChar',
+        params: { count: TIER_BOUND_COUNT },
+      },
     };
   }
 
@@ -355,36 +486,37 @@ export function boundsInfo(
     if (!(entries > 0)) {
       return {
         bounds: fallback,
-        warning: '这张表的词条数是 0，无法按词条数等分，已回退到 meta 默认值。',
+        warning: { key: 'bounds.evenNoEntries' },
       };
     }
     const even = Array.from({ length: TIER_BOUND_COUNT }, (_, i) =>
       Math.max(1, Math.round((entries * (i + 1)) / TIER_COUNT))
     );
     const ok = ascendingInts(even);
-    if (ok) return { bounds: ok, warning: '' };
-    return { bounds: fallback, warning: '按词条数等分的结果不合法（词条数太少），已回退到 meta 默认值。' };
+    if (ok) return { bounds: ok, warning: null };
+    return { bounds: fallback, warning: { key: 'bounds.evenInvalid' } };
   }
 
   // coverage
-  const targets = ascendingCoverage(settings.tierCoverage) ?? ascendingCoverage(defaultCoverageTargets(meta, kind));
+  const targets =
+    ascendingCoverage(settings.tierCoverage) ?? ascendingCoverage(defaultCoverageTargets(meta, kind));
   if (!targets) {
     return {
       bounds: fallback,
-      warning: '覆盖率目标必须严格递增、且都在 0~100% 之间，已回退到 meta 默认值。',
+      warning: { key: 'bounds.coverageInvalid' },
     };
   }
-  const curve = curves?.[table?.path ?? ''];
+  const curve = curves?.[table ? tableKeyOf(table) : ''];
   const points = curve?.points ?? [];
   if (points.length < 2) {
-    return { bounds: fallback, warning: '还没有拿到覆盖率曲线，正在用 meta 默认阈值显示。' };
+    return { bounds: fallback, warning: { key: 'bounds.coverageNoCurve' } };
   }
   const solved = targets.map((target) => rankForCoverage(points, target) ?? 0);
   const ok = ascendingInts(solved);
-  if (ok) return { bounds: ok, warning: '' };
+  if (ok) return { bounds: ok, warning: null };
   return {
     bounds: fallback,
-    warning: '这组覆盖率目标反解不出严格递增的排名阈值（目标太接近或超出曲线范围），已回退到 meta 默认值。',
+    warning: { key: 'bounds.coverageUnsolvable' },
   };
 }
 
@@ -399,9 +531,9 @@ export function tierIndexFor(
   meta: Meta | null | undefined,
   settings: Settings | null | undefined,
   curves?: Record<string, TierCurve>,
-  tablePath?: string
+  tableKey?: string
 ): number | null {
   if (!meta || !settings) return null;
-  return tierIndexFromBounds(rank, effectiveBounds(kind, meta, settings, curves, tablePath));
+  return tierIndexFromBounds(rank, effectiveBounds(kind, meta, settings, curves, tableKey));
 }
 

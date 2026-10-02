@@ -16,6 +16,10 @@
             stored === 'dark' ||
             (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
           document.documentElement.classList.toggle('dark', dark);
+          // 同理先把界面语言的 <html lang> 落上（key 见 src/lib/i18n.svelte.ts）。
+          // 标题不在这里改：本地化标题要查消息表，交给 main.ts 里的 applyLocaleToDocument()。
+          var loc = localStorage.getItem('voctier-locale');
+          if (loc) document.documentElement.lang = loc;
         } catch (e) {
           /* 忽略：隐私模式下 localStorage 不可用 */
         }

@@ -22,13 +22,16 @@
     captureSelection,
     copyText,
     defaultSettings,
+    ensureDataDirs,
     getSettings,
     isTauri,
+    openExternal,
     pickDirectory,
-    pickFile,
   } from '$lib/api/bridge';
   import { adoptSettings, saveSettingsRespectingTierState } from '$lib/tiers.svelte';
-  import { THEME_LABELS, setTheme, theme, type ThemeMode } from '$lib/theme.svelte';
+  import { setTheme, theme, themeLabel, type ThemeMode } from '$lib/theme.svelte';
+  import { adoptLocaleFromSettings, availableLocales, locale, t } from '$lib/i18n.svelte';
+  import { changeLocale } from '$lib/locale-sync';
   import { cn } from '$lib/utils';
   import type { AppInfo, Settings } from '$lib/types';
 
@@ -83,9 +86,11 @@
       if (isThemeMode(settingsRes.data.theme) && settingsRes.data.theme !== theme.mode) {
         setTheme(settingsRes.data.theme);
       }
+      // 界面语言同理：设置文件是权威值，localStorage 只是首屏的快速通道
+      adoptLocaleFromSettings(settingsRes.data.locale);
     } else {
       statusTone = 'error';
-      statusMessage = `读取设置失败：${settingsRes.error}`;
+      statusMessage = t('settings.readFailed', { error: settingsRes.error });
     }
     if (infoRes.ok) info = infoRes.data;
     else infoError = infoRes.error;
@@ -106,28 +111,42 @@
     saving = false;
     if (!res.ok) {
       statusTone = 'error';
-      statusMessage = `保存失败：${res.error}`;
+      statusMessage = t('settings.saveFailed', { error: res.error });
       return;
     }
     form = { ...res.data };
     adoptSettings(res.data);
     dirty = false;
     statusTone = 'success';
-    statusMessage = '设置已保存。';
+    statusMessage = t('settings.saved');
     if (isThemeMode(res.data.theme)) setTheme(res.data.theme);
+    adoptLocaleFromSettings(res.data.locale);
+  }
+
+  /**
+   * 切换界面语言。
+   *
+   * 与主题按钮同一套行为：**立即生效**（能立刻看到界面变成目标语言），
+   * 同时标脏；真正落盘要等用户点「保存设置」。`changeLocale` 负责本窗口状态 +
+   * localStorage + 广播给小窗。
+   */
+  function applyLocale(next: string) {
+    changeLocale(next);
+    patch({ locale: next });
   }
 
   function resetToDefaults() {
-    form = { ...defaultSettings(), theme: form.theme };
+    // 主题与语言是「本机偏好」，恢复默认值时不跟着重置，否则用户会突然看不懂界面
+    form = { ...defaultSettings(), theme: form.theme, locale: form.locale };
     markDirty();
     statusTone = 'info';
-    statusMessage = '已恢复默认值，记得点「保存设置」。';
+    statusMessage = t('settings.resetHint');
   }
 
   async function chooseDir(field: 'corpusDir' | 'dataDir') {
     pickerHint = '';
     const res = await pickDirectory(
-      field === 'corpusDir' ? '选择默认语料库目录' : '选择默认输出目录'
+      field === 'corpusDir' ? t('settings.pickCorpusDir') : t('settings.pickDataDir')
     );
     if (!res.ok) {
       pickerHint = res.error;
@@ -136,14 +155,21 @@
     if (res.data) patch({ [field]: res.data } as Partial<Settings>);
   }
 
-  async function chooseUserDict() {
+  /** 打开数据文件夹（里面是 dicts\ 与 tables\）。路径为空时让后端用默认位置。 */
+  async function openDataDir() {
     pickerHint = '';
-    const res = await pickFile('选择自定义词典');
-    if (!res.ok) {
-      pickerHint = res.error;
+    if (!form.dataDir) {
+      const res = await ensureDataDirs();
+      if (!res.ok) {
+        pickerHint = res.error;
+        return;
+      }
+      patch({ dataDir: res.data });
+      await openExternal(res.data);
       return;
     }
-    if (res.data) patch({ userDict: res.data });
+    const opened = await openExternal(form.dataDir);
+    if (!opened.ok) pickerHint = opened.error;
   }
 
   async function testCapture() {
@@ -155,14 +181,14 @@
     }
     if (!res.data) {
       statusTone = 'info';
-      statusMessage = '没有检测到选中的文本。请先在别的程序里选一段文字再试。';
+      statusMessage = t('settings.captureNoText');
       return;
     }
     const copied = await copyText(res.data);
     statusTone = copied.ok ? 'success' : 'info';
     statusMessage = copied.ok
-      ? `取词成功（${res.data.length} 字），已复制到剪贴板。`
-      : `取词成功：${res.data}`;
+      ? t('settings.captureOkCopied', { count: res.data.length })
+      : t('settings.captureOkText', { text: res.data });
   }
 
   function applyTheme(value: ThemeMode) {
@@ -174,7 +200,7 @@
 <div class="flex flex-col gap-4">
   {#if !isTauri()}
     <div class="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      浏览器预览模式：设置可以编辑与「保存」，但不会写入磁盘（仅保存在内存里）。
+      {t('settings.browserPreview')}
     </div>
   {/if}
 
@@ -194,27 +220,29 @@
   {/if}
 
   {#if loading}
-    <p class="text-xs text-muted-foreground">正在读取设置…</p>
+    <p class="text-xs text-muted-foreground">{t('settings.loading')}</p>
   {:else}
     <!-- 全局取词 -->
     <Card>
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>全局取词</CardTitle>
+          <CardTitle>{t('settings.hotkey.title')}</CardTitle>
           <Badge variant="outline">hotkey</Badge>
           {#if hotkeyValid}
-            <Badge variant="success">格式正确</Badge>
+            <Badge variant="success">{t('settings.hotkey.valid')}</Badge>
           {:else}
-            <Badge variant="outline" class="border-destructive/40 text-destructive">格式待修正</Badge>
+            <Badge variant="outline" class="border-destructive/40 text-destructive">
+              {t('settings.hotkey.invalid')}
+            </Badge>
           {/if}
         </div>
         <CardDescription>
-          按下热键会模拟一次 Ctrl+C 取走选区文本，并在悬浮小窗里做频率分析。
+          {t('settings.hotkey.description')}
         </CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium">全局热键</span>
+          <span class="text-xs font-medium">{t('settings.hotkey.label')}</span>
           <Input
             bind:value={form.hotkey}
             oninput={markDirty}
@@ -222,16 +250,18 @@
             class="max-w-56 font-mono text-xs"
           />
           <span class="text-[11px] text-muted-foreground">
-            格式：修饰键 + 主键，例如 <span class="font-mono">Alt+Q</span>、<span
-              class="font-mono">Ctrl+Shift+Q</span
-            >。
+            {t('settings.hotkey.hintPrefix')}<span class="font-mono">Alt+Q</span>{t(
+              'settings.hotkey.hintSeparator'
+            )}<span class="font-mono">Ctrl+Shift+Q</span>{t('settings.hotkey.hintSuffix')}
           </span>
         </label>
 
         <div class="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onclick={() => void testCapture()}>测试取词</Button>
+          <Button variant="outline" size="sm" onclick={() => void testCapture()}>
+            {t('settings.testCapture')}
+          </Button>
           <span class="text-[11px] text-muted-foreground">
-            测试会在当前前台程序里模拟一次复制，并把结果写入剪贴板。
+            {t('settings.testCaptureHint')}
           </span>
         </div>
 
@@ -239,15 +269,14 @@
         <div
           class="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300"
         >
-          <p class="font-medium">关于「以管理员身份运行」</p>
+          <p class="font-medium">{t('settings.adminNote.title')}</p>
           <p class="mt-1">
-            全局取词的原理是向当前焦点窗口发送 Ctrl+C。Windows 的 UIPI（用户界面特权隔离）规定：
-            <b>低完整性级别的进程不能向高完整性级别的进程发送输入</b>。因此当目标程序（例如以管理员身份运行的
-            编辑器、IDE 或终端）权限高于 VocTier 时，热键取词会被系统静默拦截，表现为「按了没反应」。
+            {t('settings.adminNote.p1Before')}<b>{t('settings.adminNote.p1Emphasis')}</b>{t(
+              'settings.adminNote.p1After'
+            )}
           </p>
           <p class="mt-1">
-            解决办法：右键 VocTier 快捷方式 →「以管理员身份运行」，让两者权限一致（都以管理员运行，
-            或都不以管理员运行）。这一限制来自 Windows 本身，应用无法绕过。
+            {t('settings.adminNote.p2')}
           </p>
         </div>
       </CardContent>
@@ -256,13 +285,13 @@
     <!-- 悬浮小窗 -->
     <Card>
       <CardHeader>
-        <CardTitle>悬浮小窗</CardTitle>
-        <CardDescription>取词后弹出的小窗尺寸、透明度与自动关闭行为。</CardDescription>
+        <CardTitle>{t('settings.popup.title')}</CardTitle>
+        <CardDescription>{t('settings.popup.description')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <label class="flex flex-col gap-1.5">
-            <span class="text-xs font-medium">宽度（px）</span>
+            <span class="text-xs font-medium">{t('settings.popup.width')}</span>
             <Input
               type="number"
               min="200"
@@ -272,7 +301,7 @@
             />
           </label>
           <label class="flex flex-col gap-1.5">
-            <span class="text-xs font-medium">高度（px）</span>
+            <span class="text-xs font-medium">{t('settings.popup.height')}</span>
             <Input
               type="number"
               min="150"
@@ -282,7 +311,7 @@
             />
           </label>
           <label class="flex flex-col gap-1.5">
-            <span class="text-xs font-medium">自动关闭（毫秒，0 = 不自动关）</span>
+            <span class="text-xs font-medium">{t('settings.popup.autoClose')}</span>
             <Input
               type="number"
               min="0"
@@ -294,12 +323,12 @@
         </div>
 
         {#if !popupSizeValid}
-          <p class="text-[11px] text-destructive">小窗至少 200 × 150 像素。</p>
+          <p class="text-[11px] text-destructive">{t('settings.popup.minSize')}</p>
         {/if}
 
         <label class="flex flex-col gap-2">
           <span class="flex items-center justify-between text-xs font-medium">
-            <span>不透明度</span>
+            <span>{t('settings.popup.opacity')}</span>
             <span class="tabular-nums text-muted-foreground">{form.popupOpacity.toFixed(2)}</span>
           </span>
           <input
@@ -310,19 +339,19 @@
             value={form.popupOpacity}
             class="h-1.5 w-full cursor-pointer accent-[var(--primary)]"
             oninput={(event) => patch({ popupOpacity: Number(event.currentTarget.value) })}
-            aria-label="小窗不透明度"
+            aria-label={t('settings.popup.opacityLabel')}
           />
         </label>
 
         <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
           <div class="min-w-0">
-            <p class="text-xs font-medium">窗口置顶</p>
-            <p class="text-[11px] text-muted-foreground">小窗始终显示在其它窗口之上</p>
+            <p class="text-xs font-medium">{t('settings.popup.alwaysOnTop')}</p>
+            <p class="text-[11px] text-muted-foreground">{t('settings.popup.alwaysOnTopHint')}</p>
           </div>
           <Switch
             checked={form.popupAlwaysOnTop}
             onCheckedChange={(checked) => patch({ popupAlwaysOnTop: checked })}
-            aria-label="窗口置顶"
+            aria-label={t('settings.popup.alwaysOnTop')}
           />
         </div>
       </CardContent>
@@ -331,8 +360,8 @@
     <!-- 主题 -->
     <Card>
       <CardHeader>
-        <CardTitle>外观</CardTitle>
-        <CardDescription>与顶栏的主题按钮共用同一份状态。</CardDescription>
+        <CardTitle>{t('settings.appearance.title')}</CardTitle>
+        <CardDescription>{t('settings.appearance.description')}</CardDescription>
       </CardHeader>
       <CardContent>
         <div class="flex flex-wrap items-center gap-2">
@@ -348,10 +377,45 @@
               )}
               onclick={() => applyTheme(mode)}
             >
-              {THEME_LABELS[mode]}
+              {themeLabel(mode)}
             </button>
           {/each}
-          <span class="text-[11px] text-muted-foreground">当前生效：{THEME_LABELS[theme.mode]}</span>
+          <span class="text-[11px] text-muted-foreground">
+            {t('settings.appearance.currentTheme', { theme: themeLabel(theme.mode) })}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- 界面语言 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('settings.language.title')}</CardTitle>
+        <CardDescription>{t('settings.language.description')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div class="flex flex-wrap items-center gap-2" data-testid="locale-picker">
+          {#each availableLocales() as option (option.value)}
+            <button
+              type="button"
+              aria-pressed={locale.value === option.value}
+              data-locale={option.value}
+              class={cn(
+                'rounded-md border px-3 py-1.5 text-xs transition-colors',
+                locale.value === option.value
+                  ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+                  : 'border-border hover:bg-accent'
+              )}
+              onclick={() => applyLocale(option.value)}
+            >
+              {option.label}
+            </button>
+          {/each}
+          {#if availableLocales().length < 2}
+            <span class="text-[11px] text-muted-foreground">
+              {t('settings.language.onlyOne')}
+            </span>
+          {/if}
         </div>
       </CardContent>
     </Card>
@@ -359,13 +423,13 @@
     <!-- 默认分词参数 -->
     <Card>
       <CardHeader>
-        <CardTitle>默认统计参数</CardTitle>
-        <CardDescription>「生成词频表」页打开时会用这里的值作为初始值。</CardDescription>
+        <CardTitle>{t('settings.tokenize.title')}</CardTitle>
+        <CardDescription>{t('settings.tokenize.description')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label class="flex flex-col gap-1.5">
-            <span class="text-xs font-medium">默认线程数（0 = 自动）</span>
+            <span class="text-xs font-medium">{t('settings.tokenize.threads')}</span>
             <Input
               type="number"
               min="0"
@@ -375,7 +439,7 @@
             />
           </label>
           <label class="flex flex-col gap-1.5">
-            <span class="text-xs font-medium">最小词频</span>
+            <span class="text-xs font-medium">{t('settings.tokenize.minCount')}</span>
             <Input
               type="number"
               min="1"
@@ -391,49 +455,51 @@
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
             <div class="min-w-0">
-              <p class="text-xs font-medium">HMM 新词发现</p>
-              <p class="text-[11px] text-muted-foreground">识别词典外的连续汉字组合</p>
+              <p class="text-xs font-medium">{t('settings.tokenize.hmm')}</p>
+              <p class="text-[11px] text-muted-foreground">{t('settings.tokenize.hmmHint')}</p>
             </div>
             <Switch
               checked={form.hmm}
               onCheckedChange={(checked) => patch({ hmm: checked })}
-              aria-label="HMM 新词发现"
+              aria-label={t('settings.tokenize.hmm')}
             />
           </div>
 
           <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
             <div class="min-w-0">
-              <p class="text-xs font-medium">保留数字词</p>
-              <p class="text-[11px] text-muted-foreground">如 2024、3.14</p>
+              <p class="text-xs font-medium">{t('settings.tokenize.keepDigit')}</p>
+              <p class="text-[11px] text-muted-foreground">{t('settings.tokenize.keepDigitHint')}</p>
             </div>
             <Switch
               checked={form.keepDigit}
               onCheckedChange={(checked) => patch({ keepDigit: checked })}
-              aria-label="保留数字词"
+              aria-label={t('settings.tokenize.keepDigit')}
             />
           </div>
 
           <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
             <div class="min-w-0">
-              <p class="text-xs font-medium">保留拉丁词</p>
-              <p class="text-[11px] text-muted-foreground">如 API、token</p>
+              <p class="text-xs font-medium">{t('settings.tokenize.keepLatin')}</p>
+              <p class="text-[11px] text-muted-foreground">{t('settings.tokenize.keepLatinHint')}</p>
             </div>
             <Switch
               checked={form.keepLatin}
               onCheckedChange={(checked) => patch({ keepLatin: checked })}
-              aria-label="保留拉丁词"
+              aria-label={t('settings.tokenize.keepLatin')}
             />
           </div>
 
           <div class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
             <div class="min-w-0">
-              <p class="text-xs font-medium">跳过单字词</p>
-              <p class="text-[11px] text-muted-foreground">只统计多字词（字表仍会产出）</p>
+              <p class="text-xs font-medium">{t('settings.tokenize.skipSingleChar')}</p>
+              <p class="text-[11px] text-muted-foreground">
+                {t('settings.tokenize.skipSingleCharHint')}
+              </p>
             </div>
             <Switch
               checked={form.skipSingleChar}
               onCheckedChange={(checked) => patch({ skipSingleChar: checked })}
-              aria-label="跳过单字词"
+              aria-label={t('settings.tokenize.skipSingleChar')}
             />
           </div>
 
@@ -441,13 +507,15 @@
             class="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 sm:col-span-2"
           >
             <div class="min-w-0">
-              <p class="text-xs font-medium">默认产出分域表</p>
-              <p class="text-[11px] text-muted-foreground">关闭后只产出全库词表 / 字表，产物更小</p>
+              <p class="text-xs font-medium">{t('settings.tokenize.domainTables')}</p>
+              <p class="text-[11px] text-muted-foreground">
+                {t('settings.tokenize.domainTablesHint')}
+              </p>
             </div>
             <Switch
               checked={!form.skipDomainTables}
               onCheckedChange={(checked) => patch({ skipDomainTables: !checked })}
-              aria-label="默认产出分域表"
+              aria-label={t('settings.tokenize.domainTables')}
             />
           </div>
         </div>
@@ -457,61 +525,69 @@
     <!-- 目录 -->
     <Card>
       <CardHeader>
-        <CardTitle>默认目录与词典</CardTitle>
-        <CardDescription>划句分析页从这里读取产物目录。</CardDescription>
+        <div class="flex flex-wrap items-center gap-2">
+          <CardTitle>{t('settings.paths.title')}</CardTitle>
+          <Badge variant="outline">{t('settings.paths.dataDirBadge')}</Badge>
+        </div>
+        <CardDescription>{t('settings.paths.description')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium">默认语料库目录</span>
+          <span class="text-xs font-medium">{t('settings.paths.corpusDir')}</span>
           <span class="flex flex-wrap items-center gap-2">
             <Input
               value={form.corpusDir ?? ''}
               oninput={(event) => patch({ corpusDir: event.currentTarget.value || null })}
-              placeholder="未设置"
+              placeholder={t('settings.paths.unset')}
               class="min-w-56 flex-1 font-mono text-xs"
             />
             <Button variant="outline" size="sm" onclick={() => void chooseDir('corpusDir')}>
-              浏览…
+              {t('common.browse')}
             </Button>
             {#if form.corpusDir}
-              <Button variant="ghost" size="sm" onclick={() => patch({ corpusDir: null })}>清除</Button>
+              <Button variant="ghost" size="sm" onclick={() => patch({ corpusDir: null })}>{t('common.clear')}</Button>
             {/if}
           </span>
         </label>
 
+        <!-- 数据文件夹：里面是 dicts\（词库库）与 tables\（词表库） -->
         <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium">默认输出目录（词频表产物）</span>
+          <span class="text-xs font-medium">{t('settings.paths.dataDir')}</span>
           <span class="flex flex-wrap items-center gap-2">
             <Input
               value={form.dataDir ?? ''}
               oninput={(event) => patch({ dataDir: event.currentTarget.value || null })}
-              placeholder="未设置"
+              placeholder={t('settings.paths.unset')}
               class="min-w-56 flex-1 font-mono text-xs"
             />
             <Button variant="outline" size="sm" onclick={() => void chooseDir('dataDir')}>
-              浏览…
+              {t('common.browse')}
+            </Button>
+            <Button variant="outline" size="sm" disabled={!isTauri()} onclick={() => void openDataDir()}>
+              {t('settings.paths.openDataDir')}
             </Button>
             {#if form.dataDir}
-              <Button variant="ghost" size="sm" onclick={() => patch({ dataDir: null })}>清除</Button>
+              <Button variant="ghost" size="sm" onclick={() => patch({ dataDir: null })}>{t('common.clear')}</Button>
             {/if}
+          </span>
+          <span class="text-[11px] leading-relaxed text-muted-foreground">
+            {t('settings.paths.dataDirHint')}
           </span>
         </label>
 
-        <label class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium">自定义词典（可选）</span>
-          <span class="flex flex-wrap items-center gap-2">
-            <Input
-              value={form.userDict ?? ''}
-              oninput={(event) => patch({ userDict: event.currentTarget.value || null })}
-              placeholder="每行「词 频次」"
-              class="min-w-56 flex-1 font-mono text-xs"
-            />
-            <Button variant="outline" size="sm" onclick={() => void chooseUserDict()}>选择…</Button>
-            {#if form.userDict}
-              <Button variant="ghost" size="sm" onclick={() => patch({ userDict: null })}>清除</Button>
-            {/if}
-          </span>
-        </label>
+        <Separator />
+
+        <!-- `userDict` 已废弃：词库现在是数据文件夹里的条目，在扫描时勾选 -->
+        <div
+          class="flex flex-col gap-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300"
+          data-testid="userdict-deprecated"
+        >
+          <p class="font-medium">{t('settings.paths.userDictDeprecatedTitle')}</p>
+          <p>{t('settings.paths.userDictDeprecatedBody')}</p>
+          {#if form.userDict}
+            <p>{t('settings.paths.userDictWillMigrate', { path: form.userDict })}</p>
+          {/if}
+        </div>
 
         {#if pickerHint}
           <p class="text-[11px] text-muted-foreground">{pickerHint}</p>
@@ -522,32 +598,32 @@
     <!-- 保存 -->
     <div class="flex flex-wrap items-center gap-3">
       <Button disabled={!canSave} onclick={() => void save()}>
-        {saving ? '保存中…' : '保存设置'}
+        {saving ? t('settings.save.saving') : t('settings.save.save')}
       </Button>
-      <Button variant="outline" onclick={resetToDefaults}>恢复默认值</Button>
+      <Button variant="outline" onclick={resetToDefaults}>{t('settings.save.reset')}</Button>
       {#if dirty}
-        <span class="text-[11px] text-amber-600 dark:text-amber-400">有未保存的修改</span>
+        <span class="text-[11px] text-amber-600 dark:text-amber-400">{t('settings.save.dirty')}</span>
       {/if}
       {#if !hotkeyValid}
-        <span class="text-[11px] text-destructive">热键格式不正确，请改成 Alt+Q 这类写法。</span>
+        <span class="text-[11px] text-destructive">{t('settings.save.hotkeyInvalid')}</span>
       {/if}
     </div>
 
     <!-- 关于 -->
     <Card>
       <CardHeader>
-        <CardTitle>关于</CardTitle>
-        <CardDescription>版本信息来自 app_info 命令。</CardDescription>
+        <CardTitle>{t('settings.about.title')}</CardTitle>
+        <CardDescription>{t('settings.about.description')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         {#if info}
           <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
             <div>
-              <dt class="text-muted-foreground">应用</dt>
+              <dt class="text-muted-foreground">{t('settings.about.app')}</dt>
               <dd class="font-medium">{info.name}</dd>
             </div>
             <div>
-              <dt class="text-muted-foreground">应用版本</dt>
+              <dt class="text-muted-foreground">{t('settings.about.appVersion')}</dt>
               <dd class="font-medium tabular-nums">v{info.version}</dd>
             </div>
             <div>
@@ -561,11 +637,13 @@
           </dl>
         {:else}
           <p class="text-xs text-muted-foreground">
-            暂时读不到版本信息{infoError ? `：${infoError}` : ''}。
+            {infoError
+              ? t('settings.about.infoUnavailableWithError', { error: infoError })
+              : t('settings.about.infoUnavailable')}
           </p>
         {/if}
         <p class="text-[11px] text-muted-foreground">
-          快捷键、目录与小窗外观会在保存后生效；热键的重新注册由 Rust 侧负责。
+          {t('settings.about.footnote')}
         </p>
       </CardContent>
     </Card>

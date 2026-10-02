@@ -8,14 +8,18 @@
  *   - 未收录（语料库没有这个词）：灰色 + 虚线下划线。
  *   - 单字 token 额外加一条底部细线，提示「查的是字表」。
  *
- * 分组怎么来的：
- *   默认直接用后端返回的 `token.tier_name`；一旦调用方传入 `meta` + `settings`
+ * 分组怎么来的（**身份是组号，不是组名**）：
+ *   默认用后端返回的组号 `token.tier`；一旦调用方传入 `meta` + `settings`
  *   （也就是用户在「表管理」页自定义过分组阈值），就改用 `tierIndexFor` 按**生效阈值**
- *   重算组号。逻辑只有一份，组件自己不复制边界。
+ *   重算组号。组号再经 `tierKeyAt` 换成稳定标识去取色，所以改界面语言或调整分组顺序
+ *   都不会串色。逻辑只有一份，组件自己不复制边界。
  */
 import { cn } from '$lib/utils';
-import { colorsForTierName, tokenStyle } from '$lib/tier-colors';
-import { tierIndexFor } from '$lib/format';
+import { colorsForTierKey, tierKeyAt, tierKeysFrom, tokenStyle } from '$lib/tier-colors';
+import { t, tierLabels } from '$lib/i18n.svelte';
+import { formatCount } from '$lib/number-locale';
+import { formatTopPercent, tierIndexFor } from '$lib/format';
+import { primaryTableKey } from '$lib/tiers.svelte';
 import { isDark } from '$lib/use-dark.svelte';
 import type { Meta, Settings, TierCurve, TokenInfo } from '$lib/types';
 
@@ -62,25 +66,39 @@ function isWhitespace(text: string): boolean {
 }
 
 /**
- * 这个 token 最终属于哪一组。
+ * 这个 token 最终属于哪一组 —— 返回**组号**（0..6），未收录 / 标点返回 null。
  *
  * `meta` + `settings` 都齐了就按生效阈值重算（自定义分组才真正生效）；
- * 否则回落到后端给的 `tier_name`（用户没动过分组设置时，两者完全一致）。
+ * 否则回落到后端给的组号 `token.tier`（用户没动过分组设置时，两者完全一致）。
  */
-function tierNameOf(token: TokenInfo): string | null {
+function tierIndexOf(token: TokenInfo): number | null {
   if (token.accepted && meta && settings) {
+    const kind = token.single_cjk ? 'char' : 'word';
+    // 阈值取**主作用域**那一张：铺平之后用户可以把任意作用域设为主表，
+    // 写死 `full/word` 会让颜色与详情面板里的前%对不上。
     const index = tierIndexFor(
-      token.single_cjk ? 'char' : 'word',
+      kind,
       token.rank,
       meta,
       settings,
       curves,
-      token.table === 'char' ? 'full/char' : 'full/word'
+      primaryTableKey(meta, kind)
     );
-    const names = meta.tier_names ?? [];
-    if (index !== null && names.length > index) return names[index];
-    if (index !== null) return token.tier_name;
+    if (index !== null) return index;
   }
+  return token.tier;
+}
+
+/** 稳定标识（配色与 `data-tier` 用它；未收录为 null） */
+function tierKeyOf(token: TokenInfo): string | null {
+  return tierKeyAt(tierIndexOf(token), tierKeysFrom(meta));
+}
+
+/** 展示用组名（tooltip 用）；组号算不出来时回落到后端给的组名。随界面语言变 */
+function tierLabelOf(token: TokenInfo): string | null {
+  const index = tierIndexOf(token);
+  const labels = tierLabels(meta);
+  if (index !== null && labels.length > index) return labels[index];
   return token.tier_name;
 }
 
@@ -89,12 +107,17 @@ function styleFor(token: TokenInfo): string {
     // 标点：不参与统计，用中性色，不写背景
     return 'color:var(--muted-foreground)';
   }
-  return tokenStyle(colorsForTierName(tierNameOf(token), dark));
+  return tokenStyle(colorsForTierKey(tierKeyOf(token), dark));
 }
 
 function titleOf(token: TokenInfo): string {
   if (token.accepted && token.count !== null) {
-    return `${token.text} · ${tierNameOf(token) ?? '未收录'} · #${token.rank} · ${token.count.toLocaleString('zh-CN')}`;
+    // 前% 优先用后端按**主表**算好的；没有就退回 rank（老产物）
+    const top =
+      token.top_pct !== null && token.top_pct !== undefined
+        ? formatTopPercent(token.top_pct)
+        : `#${token.rank}`;
+    return `${token.text} · ${tierLabelOf(token) ?? t('tier.unknown')} · ${t('tokenDetail.topValue', { pct: top })} · ${formatCount(token.count)}`;
   }
   return token.text;
 }
@@ -114,7 +137,7 @@ function titleOf(token: TokenInfo): string {
       <!-- 可点击时用真实 <button>：天然支持键盘操作，也没有 a11y 告警 -->
       <button
         type="button"
-        data-token={tierNameOf(token) ?? 'unknown'}
+        data-tier={tierKeyOf(token) ?? 'unknown'}
         title={titleOf(token)}
         class={cn(
           'cursor-pointer rounded-[3px] px-[2px] py-px text-left transition-shadow hover:ring-1 hover:ring-ring',
@@ -132,7 +155,7 @@ function titleOf(token: TokenInfo): string {
     {:else}
       <span
         role="note"
-        data-token={token.accepted ? (tierNameOf(token) ?? 'unknown') : 'punct'}
+        data-tier={token.accepted ? (tierKeyOf(token) ?? 'unknown') : 'punct'}
         title={titleOf(token)}
         class={cn(
           'rounded-[3px] px-[2px] py-px transition-shadow',

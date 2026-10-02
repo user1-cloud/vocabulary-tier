@@ -1,9 +1,9 @@
 /**
- * 分组设置 / 表开关的共享状态（Svelte 5 runes，模块级 `.svelte.ts` 是官方推荐的写法）。
+ * 分组设置 / 主作用域的共享状态（Svelte 5 runes，模块级 `.svelte.ts` 是官方推荐的写法）。
  *
  * 为什么要有这个模块：
- *   - 分组自定义（tierMethod / tierWordBounds / tierCharBounds / tierCoverage）与
- *     表开关（enabledTables）都在设置里，但**渲染分组的地方有三个页面 + 两个组件**
+ *   - 分组自定义（tierMethod / tierPct / tierWordBounds / tierCharBounds / tierCoverage）
+ *     与**主作用域**（primaryScope）都在设置里，但渲染分组的地方有三个页面 + 两个组件
  *     （划句分析、排行榜、悬浮小窗、TokenChips、TokenDetail、TierLegend）。
  *     每个页面各拉一次 `get_settings` 会持有各自的一份副本，改完一处别处不刷新。
  *   - 所以设置只在这里存一份：App.svelte 启动时 `loadTierSettings()` 一次，
@@ -14,17 +14,25 @@
  */
 
 import { defaultSettings, getSettings, setSettings, tierCurve, type Result } from './api/bridge';
-import { boundsInfo, effectiveBounds, tierIndexFor } from './format';
-import type { Meta, Settings, TierCurve, TierMethod } from './types';
+import { boundsInfo, effectiveBounds, tableKeyOf, tierIndexFor } from './format';
+import { tierLabels } from './i18n.svelte';
+import {
+  FULL_SCOPE,
+  type BoundsWarning,
+  type Meta,
+  type Settings,
+  type TierCurve,
+  type TierMethod,
+} from './types';
 
-/** 全局设置（只关心里面与分组 / 表开关有关的那几个字段） */
+/** 全局设置（只关心里面与分组 / 主作用域有关的那几个字段） */
 export const appSettings = $state<{ value: Settings }>({ value: defaultSettings() });
 
 /** 设置是否已经从后端加载过一次 */
 export const settingsReady = $state<{ value: boolean }>({ value: false });
 
 /**
- * 覆盖率曲线缓存：`表路径 → TierCurve`。
+ * 覆盖率曲线缓存：`表身份 → TierCurve`。
  *
  * Rust 侧也按产物缓存，这里再缓存一层是为了：
  *   1. 切换方法 / 改数字时不必反复走 IPC；
@@ -34,17 +42,39 @@ export const tierCurves = $state<Record<string, TierCurve>>({});
 
 const pendingCurves = new Map<string, Promise<void>>();
 
-/** 当前分组方法（非法值一律当 `'rank'`） */
+/** 当前分组方法（非法值一律当 `'top_pct'`，那是默认口径） */
 export function tierMethod(): TierMethod {
   const method = appSettings.value.tierMethod;
-  return method === 'coverage' || method === 'even' ? method : 'rank';
+  return method === 'rank' || method === 'coverage' || method === 'even' ? method : 'top_pct';
 }
 
-/** 某张表是否启用（未设置 = 全部启用） */
-export function tableEnabled(path: string): boolean {
-  const enabled = appSettings.value.enabledTables;
-  if (!enabled || enabled.length === 0) return true;
-  return enabled.includes(path);
+/**
+ * **主作用域名**（不是 `作用域/类型`）。
+ *
+ * 设置里没填就从产物里挑：`full` 优先，其次第一张有词表的作用域。
+ * 划句分析、排行榜、分组预览都必须以它为准 —— 否则同一句话在两个页面会是两种颜色。
+ */
+export function primaryScope(meta: Meta | null | undefined): string {
+  const wanted = appSettings.value.primaryScope;
+  const scopes = meta ? [...new Set(meta.tables.map((t) => t.path))] : [];
+  if (wanted && (scopes.length === 0 || scopes.includes(wanted))) return wanted;
+  if (scopes.includes(FULL_SCOPE)) return FULL_SCOPE;
+  return scopes[0] ?? FULL_SCOPE;
+}
+
+/**
+ * 主作用域里某一类的**表身份**（`作用域/类型`），用于取阈值、曲线与查表。
+ *
+ * 主作用域缺这一类时（相加只加了词表就会出现）回落到该类的第一张表 —— 宁可换个
+ * 来源也不能让整句变成「未收录」。
+ */
+export function primaryTableKey(meta: Meta | null | undefined, kind: 'word' | 'char'): string {
+  if (!meta) return `${FULL_SCOPE}/${kind}`;
+  const scope = primaryScope(meta);
+  const exact = meta.tables.find((t) => t.path === scope && t.kind === kind);
+  if (exact) return tableKeyOf(exact);
+  const fallback = meta.tables.find((t) => t.kind === kind);
+  return fallback ? tableKeyOf(fallback) : `${scope}/${kind}`;
 }
 
 /** 目标覆盖率（用户没填时由调用方按表决定兜底） */
@@ -86,13 +116,20 @@ export async function saveSettingsRespectingTierState(
   authoritative: (keyof Settings)[] = []
 ): Promise<Result<Settings>> {
   const merged: Settings = { ...next };
-  for (const key of ['enabledTables', 'tierMethod', 'tierWordBounds', 'tierCharBounds', 'tierCoverage'] as const) {
+  // 这几个字段「表管理」页与设置页都能改，谁刚改过谁说了算（`authoritative`）。
+  // `enabledTables` 已废弃，但**仍要同步**：老设置文件里可能还有值，让它在两个
+  // 页面之间保持一致，免得一次保存把它翻来覆去地改。
+  for (const key of [
+    'primaryScope',
+    'enabledTables',
+    'tierMethod',
+    'tierWordBounds',
+    'tierCharBounds',
+    'tierCoverage',
+    'tierPct',
+  ] as const) {
     if (authoritative.includes(key)) continue;
-    if (key === 'enabledTables') merged.enabledTables = appSettings.value.enabledTables;
-    else if (key === 'tierMethod') merged.tierMethod = appSettings.value.tierMethod;
-    else if (key === 'tierWordBounds') merged.tierWordBounds = appSettings.value.tierWordBounds;
-    else if (key === 'tierCharBounds') merged.tierCharBounds = appSettings.value.tierCharBounds;
-    else merged.tierCoverage = appSettings.value.tierCoverage;
+    merged[key] = appSettings.value[key] as never;
   }
   const res = await setSettings(merged);
   if (res.ok) appSettings.value = res.data;
@@ -146,20 +183,25 @@ export async function ensureCurve(
 export function activeBounds(
   kind: 'word' | 'char',
   meta: Meta | null | undefined,
-  tablePath?: string
+  tableKey?: string
 ): number[] {
   if (!meta) return [];
-  return effectiveBounds(kind, meta, appSettings.value, tierCurves, tablePath);
+  return effectiveBounds(kind, meta, appSettings.value, tierCurves, tableKey ?? primaryTableKey(meta, kind));
 }
 
-/** 生效阈值 + 回退警告 */
+/**
+ * 生效阈值 + 回退警告。
+ *
+ * `warning` 是**错误码**（`{ key, params }`，见 `types.ts::BoundsWarning`），
+ * 展示层用 `t(warning.key, warning.params)` 渲染 —— 计算层不碰界面语言。
+ */
 export function activeBoundsInfo(
   kind: 'word' | 'char',
   meta: Meta | null | undefined,
-  tablePath?: string
-): { bounds: number[]; warning: string } {
-  if (!meta) return { bounds: [], warning: '' };
-  return boundsInfo(kind, meta, appSettings.value, tierCurves, tablePath);
+  tableKey?: string
+): { bounds: number[]; warning: BoundsWarning | null } {
+  if (!meta) return { bounds: [], warning: null };
+  return boundsInfo(kind, meta, appSettings.value, tierCurves, tableKey ?? primaryTableKey(meta, kind));
 }
 
 /** 排名 → 组号（0..6；未收录返回 null） */
@@ -167,20 +209,38 @@ export function activeTierIndex(
   kind: 'word' | 'char',
   rank: number | null | undefined,
   meta: Meta | null | undefined,
-  tablePath?: string
+  tableKey?: string
 ): number | null {
   if (!meta) return null;
-  return tierIndexFor(kind, rank, meta, appSettings.value, tierCurves, tablePath);
+  return tierIndexFor(
+    kind,
+    rank,
+    meta,
+    appSettings.value,
+    tierCurves,
+    tableKey ?? primaryTableKey(meta, kind)
+  );
 }
 
-/** 组名表：优先 meta.tier_names，缺省用标准七组 */
+/**
+ * 组名表（展示用）—— **界面分组标签的唯一接缝**。
+ *
+ * 实现已挪到 `i18n.svelte.ts::tierLabels()`：那里按「组号 → 产物自带的稳定标识
+ * `tier_keys` → `tier.<key>` 本地化文案」逐级解析，查不到才回落到产物自带的
+ * `meta.tier_names`（中文）与标准七组。
+ *
+ * 也就是说：**接入新语言不需要改任何页面** —— 消息表里补上 `tier.*` 七条，
+ * 全站的分组标签、图例、排行榜筛选一起变。前提是它们都从这里取标签，
+ * 而不是各自去读 `meta.tier_names`。
+ *
+ * ⚠️ 返回值是**文案**：不要拿它当身份。判断分组、索引、配色一律用组号
+ * （`token.tier` / `activeTierIndex()`）或稳定标识（`tier-colors.ts::tierKeyAt()`）。
+ */
 export function tierNamesOf(meta: Meta | null | undefined): string[] {
-  const names = meta?.tier_names ?? [];
-  if (names.length > 0) return names;
-  return ['极多', '很多', '较多', '中等', '较少', '很少', '极少'];
+  return tierLabels(meta);
 }
 
-/** 组号 → 组名 */
+/** 组号 → 组名（展示用；越界返回 null） */
 export function tierNameAt(index: number | null, names: string[]): string | null {
   if (index === null || index < 0 || index >= names.length) return null;
   return names[index];

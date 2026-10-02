@@ -1,15 +1,16 @@
 # VocTier 桌面端（`apps/desktop`）
 
-VocTier 中文字词频率分析工具的桌面客户端前端骨架。
+VocTier 中文字词频率分析工具的桌面客户端前端。
 
 - **前端**：Svelte 5（runes 语法）+ TypeScript + Vite 7
 - **样式**：Tailwind CSS v4（CSS 优先配置，**没有** `tailwind.config.js`）
 - **组件**：shadcn-svelte 风格（手写封装，底层用 [bits-ui](https://bits-ui.com/)）
 - **壳**：Tauri v2（`src-tauri/`，一个**独立于上层 Cargo workspace** 的 Rust 工程）
-- **界面语言**：中文
+- **界面语言**：中文（i18n 内核已就绪，`zh-CN` 为源语言）
 
-> 当前状态：**只有骨架和 UI 外壳，没有业务逻辑**。所有页面渲染的都是
-> `PageStub.svelte` 占位内容。
+> 当前状态：**业务功能已实现**——划句分词着色、排行榜、词库/表管理、设置、
+> 全局热键取词与悬浮小窗均已可用。前端统一经 `src/lib/api/bridge.ts` 调用 Rust
+> 侧命令（命令清单见 `docs/DESIGN.md` §8.1）。
 
 ---
 
@@ -116,34 +117,47 @@ apps/desktop/
 │  ├─ App.svelte               # 根组件：侧边栏 + 内容区 + 顶栏
 │  ├─ app.css                  # Tailwind v4：@import / @custom-variant / @theme
 │  ├─ vite-env.d.ts
-│  ├─ routes/                  # 页面（当前都是占位）
-│  │  ├─ WordFreqPage.svelte
-│  │  ├─ SentencesPage.svelte
-│  │  ├─ LeaderboardPage.svelte
-│  │  └─ SettingsPage.svelte
+│  ├─ routes/                  # 六个功能页面
+│  │  ├─ WordFreqPage.svelte   # 生成词频表
+│  │  ├─ SentencesPage.svelte  # 划句分析（核心）
+│  │  ├─ LeaderboardPage.svelte# 排行榜
+│  │  ├─ SettingsPage.svelte   # 设置
+│  │  ├─ DictsPage.svelte      # 词库管理
+│  │  └─ TablesPage.svelte     # 表管理
 │  └─ lib/
 │     ├─ utils.ts                     # cn() —— clsx + tailwind-merge
 │     ├─ navigation.ts                # 路由表 NAV_ITEMS（id / 标题 / 图标）
-│     ├─ theme.svelte.ts              # 主题状态（runes，已可用）
-│     ├─ events.ts                    # 类型化事件总线（预留：进度事件）
-│     ├─ types.ts                     # 领域类型（预留）
+│     ├─ types.ts                     # 领域类型（与 vocfreq-core 的 serde 结构对齐）
+│     ├─ events.ts                    # 类型化事件总线（scan 进度事件）
+│     ├─ format.ts                    # 纯函数：boundsInfo / effectiveBounds / rankForCoverage
+│     ├─ segments.ts                  # 划句分析：normalizeToken / summarizeTokens
+│     ├─ tier-colors.ts               # 分组 → 配色调色板（唯一权威定义）
+│     ├─ tiers.svelte.ts              # 分组状态
+│     ├─ theme.svelte.ts              # 主题状态（runes）
+│     ├─ theme-sync.ts                # 主窗口 ↔ 小窗主题同步
+│     ├─ i18n.svelte.ts               # t() / locale / setLocale
+│     ├─ locale-sync.ts               # 主窗口 ↔ 小窗语言同步
+│     ├─ number-locale.ts             # 数字本地化（零依赖）
+│     ├─ scan-prefill.svelte.ts       # 生成词频表页的扫描参数预填
+│     ├─ messages/                    # i18n 消息表（zh-CN 源语言 + en）
 │     ├─ api/
-│     │  └─ bridge.ts                 # Tauri 调用唯一的出口（预留）
+│     │  └─ bridge.ts                 # Tauri 调用唯一出口
 │     └─ components/
+│        ├─ analysis/                 # 划句分析组件
+│        │  ├─ TierLegend.svelte
+│        │  ├─ TierStatsTable.svelte
+│        │  ├─ TokenChips.svelte
+│        │  └─ TokenDetail.svelte
 │        ├─ layout/
 │        │  ├─ Sidebar.svelte         # 左侧固定导航
-│        │  ├─ Topbar.svelte          # 内容区标题栏 + 搜索占位 + 主题切换
+│        │  ├─ Topbar.svelte          # 内容区标题栏 + 搜索 + 主题切换
 │        │  ├─ ThemeToggle.svelte     # 浅色 / 深色 / 跟随系统
-│        │  └─ PageStub.svelte        # 页面占位外壳
+│        │  └─ PageStub.svelte        # 占位外壳（仅兜底）
 │        ├─ icons/                    # 手写内联 SVG（不依赖图标包）
 │        │  ├─ index.ts
-│        │  ├─ icon-types.ts          # 图标公共 props 类型（IconProps）
-│        │  ├─ IconChart.svelte
-│        │  ├─ IconSplit.svelte
-│        │  ├─ IconTrophy.svelte
-│        │  ├─ IconSettings.svelte
-│        │  ├─ IconSun.svelte
-│        │  ├─ IconMoon.svelte
+│        │  ├─ icon-types.ts
+│        │  ├─ IconChart / IconSplit / IconTrophy / IconSettings
+│        │  ├─ IconSun / IconMoon / IconBook / IconTable
 │        │  └─ LogoMark.svelte
 │        └─ ui/                       # shadcn-svelte 风格组件
 │           ├─ index.ts
@@ -182,24 +196,23 @@ apps/desktop/
 
 ---
 
-## 7. 为后续业务逻辑预留的挂载点
+## 7. 前后端对接（已实现）
 
-| 位置 | 用途 | 现在是什么状态 |
+前端通过 `src/lib/api/bridge.ts` 统一调用 Rust 侧 `#[tauri::command]`（返回
+`Result<T, String>`，错误信息为中文）。命令清单与事件见 `docs/DESIGN.md` §8.1。
+
+| 位置 | 职责 | 状态 |
 | --- | --- | --- |
-| `src/lib/api/bridge.ts` | **前端调用 Tauri 的唯一出口**。已定义好 `Result<T>`、`isTauri()`、`WordFreqParams`、`WordFreqReport` 等占位类型；`generateWordlist()` / `analyzeSentences()` 目前返回 `{ ok: false, error: '骨架阶段…' }` | 待把 mock 换成 `invoke('命令名', args)` |
-| `src-tauri/src/lib.rs` | 已注册一个可用的 `app_info` 命令做前后端连通性自检；文件里用注释标出了业务命令的落点，加完命令记得在 `invoke_handler` 里 `generate_handler!` | 只有 `app_info` |
-| `src/routes/*.svelte` | 四个页面各自一个文件。目前只 `import PageStub`，每个文件顶部注释写了该页要做的事和接入点 | 占位 |
-| `src/lib/navigation.ts` | 单一路由表：`RouteId` 联合类型 + `NAV_ITEMS`。侧边栏、顶栏标题都由它派生 | 已可用 |
-| `src/lib/types.ts` | 领域类型（`FreqEntry` / `SortKey` / `SortOrder`），建议与 `vocfreq-core` 的 serde 结构保持一致 | 占位 |
-| `src/lib/events.ts` | 类型化事件总线，`EventMap` 里已经留了 `progress`。接 Rust 长任务时，在 `bridge.ts` 里用 `listen()` 把 `tauri://event` 桥进来，各页面用 `on('progress', …)` 订阅 | 可用但无人使用 |
-| `src/lib/theme.svelte.ts` | 主题状态（真正实现了，不是占位）：`theme` / `setTheme` / `cycleTheme` / `resolveTheme` | 已可用 |
-| `src/lib/components/ui/` | shadcn-svelte 组件。已有 Button / Card / Input / Badge / Separator / Switch。**Tabs / Slider / Select / Table 还没做**，加的时候照 `ui/switch/` 的目录结构（组件 + `index.ts`）复制即可，底层都是 bits-ui | 部分可用 |
-| `src/lib/components/icons/` | 图标统一从 `index.ts` 导出。要换 `@lucide/svelte` 时只改这个文件的导出和 `icon-types.ts` | 可用 |
-| `src/lib/components/layout/Sidebar.svelte` 底部 | 预留了「任务状态」条，以后可以显示后台统计任务的进度 | 显示 `v0.1.0 / 就绪` |
+| `src/lib/api/bridge.ts` | 前端调用 Tauri 的唯一出口（`invoke` + 事件监听） | 已实现 |
+| `src-tauri/src/lib.rs` | 注册全部 `#[tauri::command]` 与事件 | 已实现 |
+| `src/lib/events.ts` | 类型化事件总线：`scan:progress` / `scan:done` / `scan:error` | 已实现 |
+| `src/lib/navigation.ts` | 单一路由表：`RouteId` + `NAV_ITEMS` | 已可用 |
+| `src/lib/theme.svelte.ts` | 主题状态：`theme` / `setTheme` / `cycleTheme` / `resolveTheme` | 已可用 |
+| `src/lib/i18n.svelte.ts` | `t()` / locale / 分组标签解析 | 已可用（zh-CN 源语言） |
 
 ### 换成真实路由
 
-骨架用 `$state<RouteId>` 保存当前页，没引入路由库。要换的话：
+当前用 `$state<RouteId>` 保存当前页，没引入路由库。要换的话：
 
 1. `pnpm add -D svelte-routing`（或别的方案）
 2. 把 `navigation.ts` 里的 `id` 换成 `path`

@@ -7,6 +7,7 @@
    */
   import { cn } from '$lib/utils';
   import { NAV_ITEMS, type RouteId } from '$lib/navigation';
+  import { t } from '$lib/i18n.svelte';
   import LogoMark from '$lib/components/icons/LogoMark.svelte';
 
   type Props = {
@@ -42,12 +43,12 @@
     </span>
     <span class="flex min-w-0 flex-col">
       <span class="truncate text-sm font-semibold tracking-tight">{appName}</span>
-      <span class="truncate text-[11px] text-muted-foreground">字词频率分析</span>
+      <span class="truncate text-[11px] text-muted-foreground">{t('layout.sidebarTagline')}</span>
     </span>
   </div>
 
   <!-- 导航 -->
-  <nav class="flex flex-1 flex-col gap-0.5 px-2 py-1" aria-label="主导航">
+  <nav class="flex flex-1 flex-col gap-0.5 px-2 py-1" aria-label={t('layout.mainNav')}>
     {#each NAV_ITEMS as item (item.id)}
       {@const isActive = item.id === active}
       <button
@@ -65,7 +66,7 @@
           size={16}
           class={isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary'}
         />
-        <span class="truncate">{item.label}</span>
+        <span class="truncate">{t(item.labelKey)}</span>
       </button>
     {/each}
   </nav>
@@ -74,7 +75,7 @@
   <div class="border-t border-sidebar-border px-4 py-3">
     <div class="flex items-center justify-between text-[11px] text-muted-foreground">
       <span>{appVersion}</span>
-      <span>就绪</span>
+      <span>{t('layout.sidebarReady')}</span>
     </div>
   </div>
 </aside>

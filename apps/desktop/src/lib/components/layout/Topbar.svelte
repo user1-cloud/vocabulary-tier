@@ -6,6 +6,7 @@
   import ThemeToggle from './ThemeToggle.svelte';
   import Input from '$lib/components/ui/input/Input.svelte';
   import { Badge } from '$lib/components/ui/badge';
+  import { t } from '$lib/i18n.svelte';
 
   type Props = {
     title: string;
@@ -24,7 +25,7 @@
   <div class="flex min-w-0 flex-1 flex-col justify-center">
     <div class="flex items-center gap-2">
       <h1 class="truncate text-base font-semibold tracking-tight">{title}</h1>
-      <Badge variant="secondary">骨架</Badge>
+      <Badge variant="secondary">{t('layout.badge')}</Badge>
     </div>
     {#if description}
       <p class="truncate text-xs text-muted-foreground">{description}</p>
@@ -34,9 +35,9 @@
   <div class="flex shrink-0 items-center gap-2">
     <Input
       bind:value={query}
-      placeholder="搜索词条（占位）"
+      placeholder={t('layout.searchPlaceholder')}
       class="h-9 w-52 text-xs"
-      aria-label="搜索词条"
+      aria-label={t('layout.searchLabel')}
     />
     <ThemeToggle />
   </div>

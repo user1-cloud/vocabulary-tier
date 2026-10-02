@@ -3,7 +3,9 @@ import IconChart from '$lib/components/icons/IconChart.svelte';
 import IconSplit from '$lib/components/icons/IconSplit.svelte';
 import IconTrophy from '$lib/components/icons/IconTrophy.svelte';
 import IconTable from '$lib/components/icons/IconTable.svelte';
+import IconBook from '$lib/components/icons/IconBook.svelte';
 import IconSettings from '$lib/components/icons/IconSettings.svelte';
+import type { MessageKey } from './messages';
 
 /**
  * 全局路由表（骨架阶段用 $state 做「选中项」切换，不引入路由库）。
@@ -13,55 +15,66 @@ import IconSettings from '$lib/components/icons/IconSettings.svelte';
  *   2. 把这个文件的 id 换成 path
  *   3. App.svelte 里的 {#if} 分支换成 <Route>
  * 页面组件本身不需要改。
+ *
+ * ⚠️ 这里存的是**文案 key**，不是文案本身：导航文字要跟着界面语言变，而本表是模块级
+ * 常量（只在模块加载时求值一次），存字符串会让语言切换失效。展示处统一写
+ * `t(item.labelKey)`，那是响应式读点，切语言会自动重渲染。
  */
 
-export type RouteId = 'wordfreq' | 'sentences' | 'leaderboard' | 'tables' | 'settings';
+export type RouteId = 'wordfreq' | 'sentences' | 'leaderboard' | 'dicts' | 'tables' | 'settings';
 
 export type NavItem = {
   id: RouteId;
-  /** 侧边栏文字 */
-  label: string;
-  /** 顶部标题栏标题 */
-  title: string;
-  /** 顶部标题栏副标题 */
-  description: string;
+  /** 侧边栏文字（文案 key） */
+  labelKey: MessageKey;
+  /** 顶部标题栏标题（文案 key） */
+  titleKey: MessageKey;
+  /** 顶部标题栏副标题（文案 key） */
+  descriptionKey: MessageKey;
   icon: Component;
 };
 
 export const NAV_ITEMS: NavItem[] = [
   {
     id: 'wordfreq',
-    label: '生成词频表',
-    title: '生成词频表',
-    description: '导入语料目录，统计字词出现频率并导出结果表。',
+    labelKey: 'nav.wordfreq.label',
+    titleKey: 'nav.wordfreq.title',
+    descriptionKey: 'nav.wordfreq.description',
     icon: IconChart,
   },
   {
     id: 'sentences',
-    label: '划句分析',
-    title: '划句分析',
-    description: '按句切分文本，逐句查看用词分布与难度层级。',
+    labelKey: 'nav.sentences.label',
+    titleKey: 'nav.sentences.title',
+    descriptionKey: 'nav.sentences.description',
     icon: IconSplit,
   },
   {
     id: 'leaderboard',
-    label: '排行榜',
-    title: '排行榜',
-    description: '按频次、覆盖率、词长等维度查看字词排名。',
+    labelKey: 'nav.leaderboard.label',
+    titleKey: 'nav.leaderboard.title',
+    descriptionKey: 'nav.leaderboard.description',
     icon: IconTrophy,
   },
   {
+    id: 'dicts',
+    labelKey: 'nav.dicts.label',
+    titleKey: 'nav.dicts.title',
+    descriptionKey: 'nav.dicts.description',
+    icon: IconBook,
+  },
+  {
     id: 'tables',
-    label: '表管理',
-    title: '表管理',
-    description: '开关参与分域对比与排行榜的表，自定义七组分组阈值。',
+    labelKey: 'nav.tables.label',
+    titleKey: 'nav.tables.title',
+    descriptionKey: 'nav.tables.description',
     icon: IconTable,
   },
   {
     id: 'settings',
-    label: '设置',
-    title: '设置',
-    description: '分词参数、输出格式、主题与界面偏好。',
+    labelKey: 'nav.settings.label',
+    titleKey: 'nav.settings.title',
+    descriptionKey: 'nav.settings.description',
     icon: IconSettings,
   },
 ];
@@ -85,6 +98,7 @@ export function isRouteId(value: unknown): value is RouteId {
 
 export function findNavItem(id: RouteId): NavItem {
   const item = NAV_ITEMS.find((entry) => entry.id === id);
+  // 内部错误（路由 id 写错），不是用户可见文案，故不走 i18n
   if (!item) throw new Error(`未知路由：${id}`);
   return item;
 }

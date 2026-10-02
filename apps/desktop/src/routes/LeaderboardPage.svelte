@@ -23,13 +23,13 @@
   import { Separator } from '$lib/components/ui/separator';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
   import {
+    activeDataset,
+    activeTableDir,
     copyText,
-    datasetStatus,
-    getSettings,
     isTauri,
+    libraryInfo,
     listRank,
     lookupWord,
-    openDataset,
     searchWords,
   } from '$lib/api/bridge';
   import {
@@ -38,18 +38,28 @@
     formatPct,
     formatTopPercent,
     formatTimestamp,
+    tableKeyOf,
   } from '$lib/format';
   import { ANALYZE_WORD_EVENT, NAVIGATE_EVENT } from '$lib/navigation';
   import {
-    colorsForTierName,
+    colorsForTierKey,
     fromUserFromFlags,
     inDictFromFlags,
+    tierKeyAt,
+    tierKeysFrom,
     tierRangeLabelOfBounds,
   } from '$lib/tier-colors';
-  import { activeBounds, activeTierIndex, tierNameAt, tierNamesOf } from '$lib/tiers.svelte';
+  import {
+    activeBounds,
+    activeTierIndex,
+    primaryScope,
+    tierNameAt,
+    tierNamesOf,
+  } from '$lib/tiers.svelte';
+  import { t } from '$lib/i18n.svelte';
   import { isDark } from '$lib/use-dark.svelte';
   import { cn } from '$lib/utils';
-  import type { DatasetStatus, Meta, RankRow, WordHit } from '$lib/types';
+  import { metaScopes, type Meta, type RankRow, type WordHit } from '$lib/types';
 
   const PAGE_SIZE = 100;
   const SEARCH_LIMIT = 100;
@@ -57,16 +67,21 @@
   type Kind = 'word' | 'char';
 
   let kind = $state<Kind>('word');
-  /** null = 全库 */
+  /** null = **主作用域**（用户指定的那张表），不是硬编码的 full */
   let domain = $state<string | null>(null);
   let page = $state(1);
 
-  let status = $state<DatasetStatus | null>(null);
+  /**
+   * 当前打开那张表的 `meta`（开机走 `active_dataset()`，不再自己拼产物目录）。
+   *
+   * `settings.dataDir` 现在是「数据文件夹」，拿它去 `dataset_status` 永远
+   * `exists: false`，所以这个页面以前会一直显示"还没有可用的词频表"。
+   */
+  let activeMeta = $state<Meta | null>(null);
   let statusLoading = $state(true);
   let statusError = $state('');
-  /** 后端是否已把该产物目录装入缓存（open_dataset 成功） */
-  let datasetLoaded = $state(false);
-  let datasetLoadError = $state('');
+  /** 后端当前打开的那张表的产物目录（列表接口传 null 即可，这里只用于展示） */
+  let activeDir = $state<string | null>(null);
 
   let rows = $state<RankRow[]>([]);
   let loading = $state(false);
@@ -77,7 +92,12 @@
   let searchRows = $state<RankRow[]>([]);
   let searchError = $state('');
 
-  let activeTiers = $state<string[]>([]);
+  /**
+   * 分组筛选：存**组号**（0..6），不存组名。
+   *
+   * 组名是文案（将来会随界面语言变化），拿它当筛选状态的 key 会在切语言时整片失效。
+   */
+  let activeTiers = $state<number[]>([]);
 
   let detail = $state<WordHit | null>(null);
   let detailError = $state('');
@@ -91,33 +111,36 @@
 
   // ---------------------------------------------------------------- 派生
 
-  const meta: Meta | null = $derived(status?.exists ? status.meta : null);
+  const meta: Meta | null = $derived(activeMeta);
   const ready = $derived(meta !== null);
   const dark = $derived(isDark());
 
   /**
-   * 当前域 + 表种对应的表元数据（用于总条目数、total_tokens、分页与分组阈值）
+   * 当前作用域 + 表种对应的表元数据（用于条目数、total_tokens、分页与分组阈值）。
+   *
+   * `domain === null` = **主作用域**（用户指定的那张），不是硬编码的 `full`：
+   * 铺平之后任意作用域都能当主表，排行榜必须跟着它走，否则同一页里"主表"标签
+   * 与看到的排名是两张不同的表。
    */
   const currentTable = $derived.by(() => {
     if (!meta) return undefined;
-    if (domain === null) return findTable(meta.tables, kind);
-    const selected = domain;
+    const scope = domain === null ? primaryScope(meta) : domain;
     return (
-      meta.tables.find((table) => table.path === `domains/${selected}/${kind}`) ??
-      meta.tables.find(
-        (table) =>
-          table.kind === kind &&
-          table.path.includes(selected) &&
-          table.path.endsWith(`/${kind}`)
-      )
+      meta.tables.find((table) => table.path === scope && table.kind === kind) ??
+      findTable(meta.tables, kind)
     );
   });
 
   /** 当前表实际生效的 6 个排名上界（分组自定义在这里生效） */
-  const bounds = $derived(meta ? activeBounds(kind, meta, currentTable?.path) : []);
+  const bounds = $derived(
+    meta ? activeBounds(kind, meta, currentTable ? tableKeyOf(currentTable) : undefined) : []
+  );
 
-  /** 分组名顺序 */
+  /** 分组标签（展示用；本地化在 `i18n.svelte.ts::tierLabels()`） */
   const tierNames = $derived(tierNamesOf(meta));
+
+  /** 七组稳定标识：取色与身份都走它，不走组名 */
+  const tierKeys = $derived(tierKeysFrom(meta));
 
   const totalEntries = $derived(currentTable?.entries ?? 0);
   const totalTokens = $derived(currentTable?.total_tokens ?? 0);
@@ -127,21 +150,26 @@
 
   const visibleRows = $derived(isSearchMode ? searchRows : rows);
 
-  /** 当前页里被七组筛选留下的行（按生效阈值判组） */
+  /** 当前页里被七组筛选留下的行（按生效阈值判组；筛选状态存组号） */
   const filteredRows = $derived.by(() => {
     if (activeTiers.length === 0) return visibleRows;
     return visibleRows.filter((row) => {
-      const name = tierNameOf(row.rank);
-      return name !== null && activeTiers.includes(name);
+      const index = tierIndexOfRank(row.rank);
+      return index !== null && activeTiers.includes(index);
     });
   });
 
   const rangeLabel = $derived.by(() => {
-    if (isSearchMode) return `搜索结果 ${formatInt(visibleRows.length)} 条`;
+    if (isSearchMode)
+      return t('leaderboard.searchResultCount', { count: formatInt(visibleRows.length) });
     if (totalEntries === 0) return '—';
     const from = (page - 1) * PAGE_SIZE + 1;
     const to = Math.min(page * PAGE_SIZE, totalEntries);
-    return `排名 ${formatInt(from)}–${formatInt(to)} / 共 ${formatInt(totalEntries)}`;
+    return t('leaderboard.rankRange', {
+      from: formatInt(from),
+      to: formatInt(to),
+      total: formatInt(totalEntries),
+    });
   });
 
   // ---------------------------------------------------------------- 生命周期
@@ -163,31 +191,18 @@
 
   async function bootstrap() {
     statusLoading = true;
-    const settings = await getSettings();
-    const dir = settings.ok ? (settings.data.dataDir ?? settings.data.corpusDir) : null;
-    const res = await datasetStatus(dir);
+    statusError = '';
+    const res = await activeDataset();
     if (!res.ok) {
       statusLoading = false;
       statusError = res.error;
+      activeMeta = null;
       return;
     }
-    status = res.data;
-    if (!res.data.meta) {
-      statusLoading = false;
-      return;
-    }
-
-    // 让后端把产物装进缓存（并按 meta.tokenizer 重建分词器，见 DESIGN §8.1）。
-    // 后端未实现该命令时只降级提示，不阻塞其它功能。
-    datasetLoaded = false;
-    datasetLoadError = '';
-    const opened = await openDataset(res.data.dir);
-    if (opened.ok) {
-      datasetLoaded = true;
-      status = { ...res.data, meta: opened.data };
-    } else {
-      datasetLoadError = opened.error;
-    }
+    activeMeta = res.data;
+    // 顺带记下产物目录（只用于页面展示）
+    const infoRes = await libraryInfo();
+    if (infoRes.ok) activeDir = activeTableDir(infoRes.data);
     statusLoading = false;
   }
 
@@ -196,7 +211,8 @@
     loading = true;
     listError = '';
     const from = (nextPage - 1) * PAGE_SIZE + 1;
-    const res = await listRank(nextDomain, nextKind, from, PAGE_SIZE, status?.dir ?? null);
+    // dir 传 null = 用后端当前打开的那张表
+    const res = await listRank(nextDomain, nextKind, from, PAGE_SIZE, null);
     if (seq !== requestSeq) return;
     loading = false;
     if (!res.ok) {
@@ -224,7 +240,7 @@
 
   async function runSearch(value: string, nextKind: Kind) {
     const seq = ++requestSeq;
-    const res = await searchWords(value, nextKind, SEARCH_LIMIT, domain, status?.dir ?? null);
+    const res = await searchWords(value, nextKind, SEARCH_LIMIT, domain, null);
     if (seq !== requestSeq) return;
     searching = false;
     if (!res.ok) {
@@ -252,10 +268,11 @@
     page = Math.min(Math.max(1, next), totalPages);
   }
 
-  function toggleTier(name: string) {
-    activeTiers = activeTiers.includes(name)
-      ? activeTiers.filter((item) => item !== name)
-      : [...activeTiers, name];
+  /** 切换某一组（组号 0..6）的筛选状态 */
+  function toggleTier(index: number) {
+    activeTiers = activeTiers.includes(index)
+      ? activeTiers.filter((item) => item !== index)
+      : [...activeTiers, index];
   }
 
   function showNotice(message: string, tone: 'info' | 'error' = 'info') {
@@ -270,14 +287,14 @@
   function addToAnalysis(word: string) {
     if (!word) return;
     window.dispatchEvent(new CustomEvent(ANALYZE_WORD_EVENT, { detail: word }));
-    showNotice(`已加入划句分析：${word}`);
+    showNotice(t('leaderboard.addedToAnalysis', { word }));
   }
 
   async function showDetail(word: string) {
     detailOpen = true;
     detail = null;
     detailError = '';
-    const res = await lookupWord(word, kind, status?.dir ?? null);
+    const res = await lookupWord(word, kind, null);
     if (!res.ok) {
       detailError = res.error;
       return;
@@ -287,16 +304,34 @@
 
   async function copyRow(word: string) {
     const res = await copyText(word);
-    showNotice(res.ok ? `已复制：${word}` : res.error, res.ok ? 'info' : 'error');
+    showNotice(
+      res.ok ? t('leaderboard.copied', { word }) : res.error,
+      res.ok ? 'info' : 'error'
+    );
   }
 
   function goWordFreq() {
     window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: 'wordfreq' }));
   }
 
+  function goDicts() {
+    window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: 'dicts' }));
+  }
+
   function pctOf(row: RankRow): number | null {
+    // 后端在 RankRow 上已经算好了占比与前%，总 token 拿不到时才用页面上那份兜底
+    if (row.pct !== null && row.pct !== undefined) return row.pct;
     if (!totalTokens) return null;
     return (row.count * 100) / totalTokens;
+  }
+
+  /**
+   * 「前 X%」= 排名 ÷ 表内词条总数（**默认口径**，见 TokenDetail.svelte 的 `topPercent`）。
+   * 优先用后端给的 `top_pct`；没有就按当前表的条目数自己算。
+   */
+  function topPctOf(row: RankRow): number | null {
+    if (row.top_pct !== null && row.top_pct !== undefined) return row.top_pct;
+    return topPercentOf(row.rank);
   }
 
   /**
@@ -309,17 +344,24 @@
   }
 
   /**
-   * 排名 → 组名（按生效阈值；分组自定义后与后端返回的 `tier_name` 可能不同）。
+   * 排名 → **组号**（按生效阈值；分组自定义后与后端返回的 `tier` 可能不同）。
    * 未收录返回 null。
+   *
+   * 返回组号而不是组名：组名是文案，组号才是身份（筛选、取色都靠它）。
    */
-  function tierNameOf(rank: number | null | undefined): string | null {
+  function tierIndexOfRank(rank: number | null | undefined): number | null {
     if (!meta) return null;
-    return tierNameAt(activeTierIndex(kind, rank, meta, currentTable?.path), tierNames);
+    return activeTierIndex(kind, rank, meta, currentTable ? tableKeyOf(currentTable) : undefined);
   }
 
-  /** 分组 pill 的内联样式（取该组当前主题的色阶） */
-  function tierPillStyle(name: string | null): string {
-    const colors = colorsForTierName(name, dark);
+  /** 组号 → 展示用组名 */
+  function tierLabelOf(index: number | null): string | null {
+    return tierNameAt(index, tierNames);
+  }
+
+  /** 分组 pill 的内联样式（按组号取该组当前主题的色阶） */
+  function tierPillStyle(index: number | null): string {
+    const colors = colorsForTierKey(tierKeyAt(index, tierKeys), dark);
     const parts = [`color:${colors.fg}`];
     if (colors.bg !== 'transparent') parts.push(`background-color:${colors.bg}`);
     parts.push(`border-color:${colors.fg}55`);
@@ -330,12 +372,12 @@
     const badges: { label: string; tone: string }[] = [];
     if (!inDictFromFlags(flags)) {
       badges.push({
-        label: '词典外',
+        label: t('leaderboard.flagOutOfDict'),
         tone: 'border-amber-500/40 text-amber-600 dark:text-amber-400',
       });
     }
     if (fromUserFromFlags(flags)) {
-      badges.push({ label: '用户词典', tone: 'border-primary/40 text-primary' });
+      badges.push({ label: t('leaderboard.flagUserDict'), tone: 'border-primary/40 text-primary' });
     }
     return badges;
   }
@@ -344,7 +386,7 @@
 <div class="flex flex-col gap-4">
   {#if !isTauri()}
     <div class="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      浏览器预览模式：正在使用内置演示数据，翻页 / 搜索 / 分组筛选都可以直接体验。
+      {t('leaderboard.browserPreview')}
     </div>
   {/if}
 
@@ -364,61 +406,60 @@
   {#if statusLoading}
     <Card>
       <CardContent class="py-8 text-center text-xs text-muted-foreground">
-        正在检查语料库产物…
+        {t('leaderboard.checking')}
       </CardContent>
     </Card>
   {:else if statusError}
     <Card class="border-destructive/30">
-      <CardContent class="py-6 text-xs text-destructive">读取数据集状态失败：{statusError}</CardContent>
+      <CardContent class="py-6 text-xs text-destructive"
+        >{t('leaderboard.statusFailed', { error: statusError })}</CardContent
+      >
     </Card>
   {:else if !ready}
     <Card class="border-dashed">
       <CardHeader>
         <div class="flex items-center gap-2">
-          <CardTitle>还没有可用的词频表</CardTitle>
-          <Badge variant="outline">dataset_status.exists = false</Badge>
+          <CardTitle>{t('leaderboard.noTable.title')}</CardTitle>
+          <Badge variant="outline">active_dataset = null</Badge>
         </div>
-        <CardDescription>排行榜需要先生成频率表。当前检查的目录：</CardDescription>
+        <CardDescription>{t('leaderboard.noTable.description')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <p class="selectable rounded-md bg-surface-muted/60 px-3 py-2 font-mono text-xs">
-          {status?.dir || '（未设置输出目录）'}
+          {activeDir || t('leaderboard.noDir')}
         </p>
         <div class="flex gap-2">
-          <Button onclick={goWordFreq}>去生成词频表</Button>
-          <Button variant="outline" onclick={() => void bootstrap()}>重新检查</Button>
+          <Button onclick={goWordFreq}>{t('leaderboard.goWordFreq')}</Button>
+          <Button variant="outline" onclick={goDicts}>{t('leaderboard.goDicts')}</Button>
+          <Button variant="outline" onclick={() => void bootstrap()}>{t('leaderboard.recheck')}</Button>
         </div>
       </CardContent>
     </Card>
   {:else}
-    {#if !datasetLoaded}
-      <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-        <p class="font-medium">产物目录尚未装载到后端</p>
-        <p class="mt-0.5">
-          已找到 meta.json（{status?.dir}），但 `open_dataset` 未成功
-          {datasetLoadError ? `：${datasetLoadError}` : '。'}。
-          在 Rust 侧实现该命令前，列表接口可能返回空结果。
-        </p>
-      </div>
-    {/if}
-
     <!-- 控制区 -->
     <Card>
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>排行榜</CardTitle>
-          <Badge variant="secondary">{kind === 'word' ? '词表' : '字表'}</Badge>
-          <Badge variant="outline">{domain ?? '全库'}</Badge>
+          <CardTitle>{t('leaderboard.title')}</CardTitle>
+          <Badge variant="secondary">{kind === 'word' ? t('table.word') : t('table.char')}</Badge>
+          <Badge variant="outline">{domain ?? primaryScope(meta)}</Badge>
+          {#if domain === null}
+            <!-- 主作用域是全局设置，这里明确标出来，免得用户以为排行榜看的是 full -->
+            <Badge variant="secondary">{t('leaderboard.primaryBadge')}</Badge>
+          {/if}
         </div>
         <CardDescription>
-          {formatTimestamp(meta?.generated_at)} 生成 · 当前表 {formatInt(totalEntries)} 条目 ·
-          {formatInt(totalTokens)} token
+          {t('leaderboard.summary', {
+            generated: formatTimestamp(meta?.generated_at),
+            entries: formatInt(totalEntries),
+            tokens: formatInt(totalTokens),
+          })}
         </CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
-        <!-- 域切换 -->
+        <!-- 作用域切换：铺平之后每个作用域都是一张平等的表 -->
         <div class="flex flex-wrap items-center gap-1.5">
-          <span class="mr-1 text-xs font-medium">域</span>
+          <span class="mr-1 text-xs font-medium">{t('leaderboard.scope')}</span>
           <button
             type="button"
             class={cn(
@@ -429,21 +470,24 @@
             )}
             onclick={() => switchDomain(null)}
           >
-            全库
+            {t('leaderboard.primaryScope', { scope: primaryScope(meta) })}
           </button>
-          {#each meta?.domains ?? [] as item (item.name)}
+          {#each metaScopes(meta) as name (name)}
+            {@const info = meta?.tables.find((x) => x.path === name && x.kind === kind)}
             <button
               type="button"
               class={cn(
                 'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                domain === item.name
+                domain === name
                   ? 'border-primary/40 bg-primary/10 font-medium text-primary'
                   : 'border-border hover:bg-accent'
               )}
-              onclick={() => switchDomain(item.name)}
+              onclick={() => switchDomain(name)}
             >
-              {item.name}
-              <span class="ml-1 text-[10px] text-muted-foreground">{formatInt(item.files)}</span>
+              {name}
+              {#if info}
+                <span class="ml-1 text-[10px] text-muted-foreground">{formatInt(info.entries)}</span>
+              {/if}
             </button>
           {/each}
         </div>
@@ -462,7 +506,7 @@
               )}
               onclick={() => switchKind('word')}
             >
-              词表
+              {t('table.word')}
             </button>
             <button
               type="button"
@@ -473,7 +517,7 @@
               )}
               onclick={() => switchKind('char')}
             >
-              字表
+              {t('table.char')}
             </button>
           </div>
 
@@ -482,34 +526,38 @@
             <Input
               value={query}
               oninput={(event) => onQueryInput(event.currentTarget.value)}
-              placeholder="按词首前缀搜索，例如「语」"
+              placeholder={t('leaderboard.searchPlaceholder')}
               class="text-xs"
-              aria-label="前缀搜索"
+              aria-label={t('leaderboard.searchAria')}
             />
             {#if isSearchMode}
-              <Button variant="ghost" size="sm" onclick={() => onQueryInput('')}>清除</Button>
+              <Button variant="ghost" size="sm" onclick={() => onQueryInput('')}
+                >{t('common.clear')}</Button
+              >
             {/if}
           </div>
 
           {#if searching}
-            <span class="text-[11px] text-muted-foreground">搜索中…</span>
+            <span class="text-[11px] text-muted-foreground">{t('leaderboard.searching')}</span>
           {/if}
         </div>
 
         <!-- 七组筛选 -->
         <div class="flex flex-col gap-2 rounded-lg border border-border p-3">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-medium">分组筛选</span>
+            <span class="text-xs font-medium">{t('leaderboard.tierFilter')}</span>
             <span class="text-[11px] text-muted-foreground">
-              仅作用于当前已加载的 {formatInt(visibleRows.length)} 条（后端按排名分页，无法跨页筛选）
+              {t('leaderboard.tierFilterHint', { count: formatInt(visibleRows.length) })}
             </span>
             {#if activeTiers.length > 0}
-              <Button variant="ghost" size="sm" onclick={() => (activeTiers = [])}>清除筛选</Button>
+              <Button variant="ghost" size="sm" onclick={() => (activeTiers = [])}
+                >{t('leaderboard.clearFilter')}</Button
+              >
             {/if}
           </div>
           <div class="flex flex-wrap gap-1.5">
-            {#each tierNames as name, index (name)}
-              {@const active = activeTiers.includes(name)}
+            {#each tierNames as name, index (index)}
+              {@const active = activeTiers.includes(index)}
               <button
                 type="button"
                 aria-pressed={active}
@@ -517,15 +565,15 @@
                   'rounded-md border px-2 py-1 text-[11px] transition-colors',
                   active ? 'ring-1 ring-ring' : 'opacity-80 hover:opacity-100'
                 )}
-                style={tierPillStyle(name)}
-                onclick={() => toggleTier(name)}
+                style={tierPillStyle(index)}
+                onclick={() => toggleTier(index)}
               >
                 {name}
                 <span class="ml-1 opacity-70">{tierRangeLabelOfBounds(index, bounds)}</span>
               </button>
             {/each}
           </div>
-          <TierLegend names={tierNames} bounds={bounds} showUnknown={false} />
+          <TierLegend names={tierNames} keys={tierKeys} bounds={bounds} showUnknown={false} />
         </div>
 
         {#if listError}
@@ -545,38 +593,46 @@
     <Card>
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>排名列表</CardTitle>
+          <CardTitle>{t('leaderboard.rankListTitle')}</CardTitle>
           <Badge variant="outline">{rangeLabel}</Badge>
           {#if activeTiers.length > 0}
-            <Badge variant="secondary">筛选后 {formatInt(filteredRows.length)} 条</Badge>
+            <Badge variant="secondary"
+              >{t('leaderboard.filteredCount', { count: formatInt(filteredRows.length) })}</Badge
+            >
           {/if}
-          {#if loading}<Badge variant="outline">加载中…</Badge>{/if}
+          {#if loading}<Badge variant="outline">{t('leaderboard.loading')}</Badge>{/if}
         </div>
-        <CardDescription>点击任意一行可「加入分析」，把该词送到划句分析页。</CardDescription>
+        <CardDescription>{t('leaderboard.rowHint')}</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <div class="scrollbar-thin max-h-[32rem] overflow-auto rounded-lg border border-border">
           <table class="w-full border-collapse text-xs">
             <thead class="sticky top-0 z-10 bg-surface-muted text-muted-foreground">
               <tr>
-                <th class="w-20 px-3 py-2 text-right font-medium">排名</th>
-                <th class="px-3 py-2 text-left font-medium">词</th>
-                <th class="px-3 py-2 text-right font-medium">频次</th>
-                <th class="px-3 py-2 text-right font-medium" title="占比 = 该词频次 ÷ 全库表总 token 数（不是词条数的比例）">
-                  占比
+                <th class="w-20 px-3 py-2 text-right font-medium">{t('leaderboard.col.rank')}</th>
+                <th class="px-3 py-2 text-left font-medium">{t('leaderboard.col.word')}</th>
+                <th class="px-3 py-2 text-right font-medium">{t('leaderboard.col.count')}</th>
+                <th class="px-3 py-2 text-right font-medium" title={t('leaderboard.col.topTitle')}>
+                  {t('leaderboard.col.top')}
                 </th>
-                <th class="px-3 py-2 text-left font-medium">分组</th>
-                <th class="px-3 py-2 text-left font-medium">标记</th>
-                <th class="px-3 py-2 text-right font-medium">操作</th>
+                <th
+                  class="px-3 py-2 text-right font-medium"
+                  title={t('leaderboard.col.shareTitle')}
+                >
+                  {t('leaderboard.col.share')}
+                </th>
+                <th class="px-3 py-2 text-left font-medium">{t('leaderboard.col.tier')}</th>
+                <th class="px-3 py-2 text-left font-medium">{t('leaderboard.col.flags')}</th>
+                <th class="px-3 py-2 text-right font-medium">{t('leaderboard.col.actions')}</th>
               </tr>
             </thead>
             <tbody>
               {#each filteredRows as row (row.rank + '-' + row.word)}
-                {@const tierName = tierNameOf(row.rank)}
+                {@const tierIdx = tierIndexOfRank(row.rank)}
                 <tr
                   class="cursor-pointer border-t border-border/70 transition-colors hover:bg-accent/50"
                   onclick={() => addToAnalysis(row.word)}
-                  title="点击加入划句分析"
+                  title={t('leaderboard.rowTitle')}
                 >
                   <td class="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
                     {formatInt(row.rank)}
@@ -584,21 +640,24 @@
                   <td class="px-3 py-1.5 font-mono text-[13px]">{row.word}</td>
                   <td class="px-3 py-1.5 text-right tabular-nums">{formatInt(row.count)}</td>
                   <td class="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                    {formatTopPercent(topPctOf(row))}
+                  </td>
+                  <td class="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
                     {formatPct(pctOf(row))}
                   </td>
                   <td class="px-3 py-1.5">
                     <span
                       class="rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                      style={tierPillStyle(tierName)}
+                      style={tierPillStyle(tierIdx)}
                     >
-                      {tierName ?? '未收录'}
+                      {tierLabelOf(tierIdx) ?? t('tier.unknown')}
                     </span>
                   </td>
                   <td class="px-3 py-1.5">
                     {#if kind === 'char'}
-                      <span class="text-[11px] text-muted-foreground">字表无词典标记</span>
+                      <span class="text-[11px] text-muted-foreground">{t('leaderboard.charNoFlag')}</span>
                     {:else if flagBadges(row.flags).length === 0}
-                      <span class="text-[11px] text-muted-foreground">词典内</span>
+                      <span class="text-[11px] text-muted-foreground">{t('leaderboard.inDict')}</span>
                     {:else}
                       <span class="flex flex-wrap gap-1">
                         {#each flagBadges(row.flags) as badge (badge.label)}
@@ -619,7 +678,7 @@
                           void showDetail(row.word);
                         }}
                       >
-                        详情
+                        {t('leaderboard.detail')}
                       </button>
                       <button
                         type="button"
@@ -629,7 +688,7 @@
                           void copyRow(row.word);
                         }}
                       >
-                        复制
+                        {t('leaderboard.copy')}
                       </button>
                     </span>
                   </td>
@@ -641,12 +700,12 @@
           {#if filteredRows.length === 0}
             <p class="px-4 py-10 text-center text-xs text-muted-foreground">
               {loading
-                ? '加载中…'
+                ? t('leaderboard.loading')
                 : isSearchMode
-                  ? `没有以「${query.trim()}」开头的词条。`
+                  ? t('leaderboard.emptySearch', { query: query.trim() })
                   : activeTiers.length > 0
-                    ? '当前页没有符合分组筛选的词条，试试翻页或清除筛选。'
-                    : '这一页没有数据。'}
+                    ? t('leaderboard.emptyFiltered')
+                    : t('leaderboard.emptyPage')}
             </p>
           {/if}
         </div>
@@ -654,13 +713,13 @@
         {#if !isSearchMode}
           <div class="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" disabled={page <= 1} onclick={() => gotoPage(1)}>
-              首页
+              {t('leaderboard.firstPage')}
             </Button>
             <Button variant="outline" size="sm" disabled={page <= 1} onclick={() => gotoPage(page - 1)}>
-              上一页
+              {t('leaderboard.prevPage')}
             </Button>
             <span class="text-xs text-muted-foreground">
-              第
+              {t('leaderboard.pageLabel')}
               <input
                 type="number"
                 min="1"
@@ -668,9 +727,9 @@
                 value={page}
                 class="mx-1 w-16 rounded border border-input bg-surface px-1.5 py-0.5 text-center text-xs tabular-nums"
                 onchange={(event) => gotoPage(Number(event.currentTarget.value))}
-                aria-label="页码"
+                aria-label={t('leaderboard.pageAria')}
               />
-              / {formatInt(totalPages)} 页
+              {t('leaderboard.totalPages', { count: formatInt(totalPages) })}
             </span>
             <Button
               variant="outline"
@@ -678,7 +737,7 @@
               disabled={page >= totalPages}
               onclick={() => gotoPage(page + 1)}
             >
-              下一页
+              {t('leaderboard.nextPage')}
             </Button>
             <Button
               variant="outline"
@@ -686,9 +745,11 @@
               disabled={page >= totalPages}
               onclick={() => gotoPage(totalPages)}
             >
-              末页
+              {t('leaderboard.lastPage')}
             </Button>
-            <span class="ml-auto text-[11px] text-muted-foreground">每页 {PAGE_SIZE} 条</span>
+            <span class="ml-auto text-[11px] text-muted-foreground"
+              >{t('leaderboard.perPage', { count: PAGE_SIZE })}</span
+            >
           </div>
         {/if}
       </CardContent>
@@ -699,9 +760,9 @@
       <Card class="border-primary/30">
         <CardHeader>
           <div class="flex items-center gap-2">
-            <CardTitle>词条详情</CardTitle>
+            <CardTitle>{t('leaderboard.detailTitle')}</CardTitle>
             <Button variant="ghost" size="sm" class="ml-auto" onclick={() => (detailOpen = false)}>
-              关闭
+              {t('leaderboard.close')}
             </Button>
           </div>
         </CardHeader>
@@ -711,51 +772,63 @@
               {detailError}
             </p>
           {:else if detail}
-            {@const detailTier = tierNameOf(detail.rank)}
+            {@const detailTier = tierIndexOfRank(detail.rank)}
             <div class="flex flex-wrap items-center gap-3">
               <span class="text-lg font-semibold">{detail.word}</span>
               <span
                 class="rounded-full border px-2 py-0.5 text-[11px] font-medium"
                 style={tierPillStyle(detailTier)}
               >
-                {detailTier ?? '未收录'}
+                {tierLabelOf(detailTier) ?? t('tier.unknown')}
               </span>
               <Badge variant="outline">
-                第 {(detailTier === null ? detail.tier : tierNames.indexOf(detailTier)) + 1} 组
+                {t('leaderboard.groupN', { index: (detailTier ?? detail.tier) + 1 })}
               </Badge>
             </div>
             <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
               <div>
-                <dt class="text-muted-foreground">排名</dt>
+                <dt class="text-muted-foreground">{t('leaderboard.col.rank')}</dt>
                 <dd class="font-medium tabular-nums">#{formatInt(detail.rank)}</dd>
               </div>
               <div>
-                <dt class="text-muted-foreground" title="排名 ÷ 该表词条总数">前</dt>
+                <dt class="text-muted-foreground" title={t('leaderboard.detail.topTitle')}
+                  >{t('leaderboard.detail.top')}</dt
+                >
                 <dd class="font-medium tabular-nums">
-                  {formatTopPercent(topPercentOf(detail.rank))}
+                  {formatTopPercent(
+                    detail.top_pct !== null && detail.top_pct !== undefined
+                      ? detail.top_pct
+                      : topPercentOf(detail.rank)
+                  )}
                 </dd>
               </div>
               <div>
-                <dt class="text-muted-foreground">频次</dt>
+                <dt class="text-muted-foreground">{t('leaderboard.col.count')}</dt>
                 <dd class="font-medium tabular-nums">{formatInt(detail.count)}</dd>
               </div>
               <div>
-                <dt class="text-muted-foreground" title="该词频次 ÷ 全库表总 token 数">占比</dt>
+                <dt class="text-muted-foreground" title={t('leaderboard.detail.shareTitle')}
+                  >{t('leaderboard.col.share')}</dt
+                >
                 <dd class="font-medium tabular-nums">{formatPct(detail.pct)}</dd>
               </div>
               <div>
-                <dt class="text-muted-foreground">词典</dt>
-                <dd class="font-medium">{detail.in_dict ? 'jieba 词典内' : '词典外'}</dd>
+                <dt class="text-muted-foreground">{t('leaderboard.detail.dict')}</dt>
+                <dd class="font-medium"
+                  >{detail.in_dict ? t('leaderboard.detail.inDict') : t('leaderboard.detail.outDict')}</dd
+                >
               </div>
             </dl>
             <div class="flex gap-2">
-              <Button size="sm" onclick={() => addToAnalysis(detail?.word ?? '')}>加入分析</Button>
+              <Button size="sm" onclick={() => addToAnalysis(detail?.word ?? '')}
+                >{t('leaderboard.addToAnalysis')}</Button
+              >
               <Button variant="outline" size="sm" onclick={() => void copyRow(detail?.word ?? '')}>
-                复制词
+                {t('leaderboard.copyWord')}
               </Button>
             </div>
           {:else}
-            <p class="text-xs text-muted-foreground">查询中…</p>
+            <p class="text-xs text-muted-foreground">{t('leaderboard.detailLoading')}</p>
           {/if}
         </CardContent>
       </Card>

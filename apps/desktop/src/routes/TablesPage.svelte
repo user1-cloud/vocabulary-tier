@@ -1,17 +1,19 @@
 <script lang="ts">
   /**
-   * 表管理 —— 两件事：
+   * 表管理 —— 三件事：
    *
-   *   A. **表清单与开关**：产物目录里是「2 种类型 × 8 个作用域 = 16 张表」，
-   *      全部登记在 `meta.tables` 里（不需要新的后端命令）。每张表一个开关，
-   *      写进 `Settings.enabledTables`，Rust 侧据此过滤划句分析里的分域排名。
-   *      空数组或 null = 全部启用；全库表始终用于「单个词/字的总体频率」查询，
-   *      关掉它只影响分域对比与排行榜。
+   *   A. **频率表清单**：产物里每个**作用域**各有一张词表 + 一张字表，它们**完全平级**
+   *      （`full` 只是"所有域加在一起"的那一个，没有任何特权）。这里只有一张统一清单，
+   *      不再分「全库表 / 分域表」两个区。
+   *   B. **主词频表**：指定哪一张决定"这个词有多常见"。划句分析的着色与分组、
+   *      排行榜、分组阈值预览都以它为准，其余表只做对比。粒度是全局的 ——
+   *      否则同一句话在两个页面会是两种颜色。
+   *   C. **相加**：把若干张表加起来成一张新表。相加在数学上是精确的
+   *      （`scan` 本身就是"逐作用域扫完再累加"），新表与别的表完全平级：
+   *      能当主表、能再被相加、能删掉回收空间。
    *
-   *   B. **分组自定义**：三种口径（排名 / 覆盖率 / 词条数等分）各自给六组定阈值，
-   *      第 7 组自动是「以上全部」。排名与等分是纯前端能算的；覆盖率要用
-   *      `tier_curve` 拿到的对数采样曲线反解成排名（`format.ts::rankForCoverage`，
-   *      与 Rust 侧 `vocfreq_core::query::rank_for_coverage` 等价）。
+   * 分组自定义（第四件事）在下面另一张卡片里：四种口径（**前%** / 排名 / 覆盖率 /
+   * 词条数等分），默认是**前%**。
    *
    * 所有保存都走 `$lib/tiers.svelte.ts` 的 `updateSettings`：它把改动并进当前设置，
    * 所以这里不会覆盖掉设置页里的其它字段，设置页也不会覆盖这里改的值。
@@ -26,56 +28,96 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import { Separator } from '$lib/components/ui/separator';
-  import { Switch } from '$lib/components/ui/switch';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
-  import { datasetStatus, isTauri, openDataset } from '$lib/api/bridge';
+  import {
+    activeDataset,
+    activateLibraryTable,
+    activeTableDir,
+    composeTables,
+    dictList,
+    isTauri,
+    libraryInfo,
+    openExternal,
+    setPrimaryScope,
+    tableDelete,
+    tableList,
+  } from '$lib/api/bridge';
   import {
     defaultCoverageTargets,
     findTable,
     formatBytes,
     formatInt,
     formatRatio,
+    formatTimestamp,
+    formatTopPercent,
     rankForCoverage,
     tierIndexFromBounds,
-  } from '$lib/format';
-  import { NAVIGATE_EVENT } from '$lib/navigation';
+  } from '$lib/format';  import { NAVIGATE_EVENT } from '$lib/navigation';
+  import { formatCount } from '$lib/number-locale';
+  import { requestScanPrefill } from '$lib/scan-prefill.svelte';
+  import { splitMessage, t } from '$lib/i18n.svelte';
+  import type { MessageKey } from '$lib/messages';
   import {
     activeBoundsInfo,
     appSettings,
     ensureCurve,
+    primaryScope,
     tierNamesOf,
     updateSettings,
   } from '$lib/tiers.svelte';
-  import { paletteForTierName, swatchStyle } from '$lib/tier-colors';
+  import { paletteForTierKey, swatchStyle, tierKeyAt, tierKeysFrom } from '$lib/tier-colors';
   import { isDark } from '$lib/use-dark.svelte';
   import { cn } from '$lib/utils';
   import {
+    defaultTierPct,
+    metaScopes,
+    tableKey,
     TIER_BOUND_COUNT,
     TIER_COUNT,
+    wordEntriesOf,
+    type Binding,
+    type BoundsWarning,
+    type DictItem,
+    type LibraryInfo,
     type Meta,
+    type Origin,
+    type TableItem,
     type TableMeta,
     type TierCurve,
     type TierMethod,
   } from '$lib/types';
 
-  const METHOD_LABELS: Record<TierMethod, string> = {
-    rank: '按排名',
-    coverage: '按覆盖率',
-    even: '按词条数等分',
+  /** 数据文件夹那一块的文案 key（与「词库管理」页共用同一批） */
+  const ORIGIN_LABELS: Record<Origin, MessageKey> = {
+    seeded: 'dicts.origin.seeded',
+    imported: 'dicts.origin.imported',
+    scanned: 'dicts.origin.scanned',
+    unknown: 'dicts.origin.unknown',
   };
 
-  const METHOD_NOTES: Record<TierMethod, { what: string; when: string }> = {
+  const METHOD_LABELS: Record<TierMethod, MessageKey> = {
+    top_pct: 'tables.method.topPct',
+    rank: 'tables.method.rank',
+    coverage: 'tables.method.coverage',
+    even: 'tables.method.even',
+  };
+
+  const METHOD_NOTES: Record<TierMethod, { what: MessageKey; when: MessageKey }> = {
+    top_pct: {
+      what: 'tables.methodNote.topPct.what',
+      when: 'tables.methodNote.topPct.when',
+    },
     rank: {
-      what: '直接给七组定排名上界：第 1 组 = 排名 1..N₁，第 2 组 = N₁+1..N₂ …… 第 7 组 = 最后一个上界以上全部。',
-      when: '最直观，跨语料库也能比较；但看不出每组实际盖住多少正文——同样是「前 100 名」，在不同语料库里覆盖的比例可以差很多。',
+      what: 'tables.methodNote.rank.what',
+      when: 'tables.methodNote.rank.when',
     },
     coverage: {
-      what: '给定「每组累计覆盖正文的百分比」，程序用覆盖率曲线反解出对应的排名上界（在 log10(rank) 上插值）。',
-      when: '跨语料库最可比（不用关心词条总数），适合「前 50% 正文由多少词覆盖」这类问题；代价是各组的大小差异会很大。',
+      what: 'tables.methodNote.coverage.what',
+      when: 'tables.methodNote.coverage.when',
     },
     even: {
-      what: '简单粗暴地按词条数七等分：每组词条数几乎相同。',
-      when: '想让每组样本量接近（抽样、统计检验）时用；与「常用 / 生僻」的直觉完全无关。',
+      what: 'tables.methodNote.even.what',
+      when: 'tables.methodNote.even.when',
     },
   };
 
@@ -93,30 +135,51 @@
     kind: 'word' | 'char';
     rows: PreviewRow[];
     bounds: number[];
-    warning: string;
+    /** 阈值回退警告（**错误码**；渲染在模板里，见 `BoundsWarning`） */
+    warning: BoundsWarning | null;
+    /** 「阈值被夹到词条数」的说明（本页生成，已是本地化文案） */
+    capNote: string;
   };
-
-  type DomainRow = { domain: string; word?: TableMeta; char?: TableMeta };
 
   const dark = $derived(isDark());
 
   let meta = $state<Meta | null>(null);
-  let statusDir = $state<string | null>(null);
   let loading = $state(true);
   let loadError = $state('');
-  let datasetLoaded = $state(false);
-  let datasetLoadError = $state('');
+
+  // ------------------------------------------------- 数据文件夹（词表管理）
+  /** 数据文件夹的整体状况（`library_info`） */
+  let library = $state<LibraryInfo | null>(null);
+  /** `table_list()` 的全部表：数据文件夹里的 + 数据文件夹之外那张激活的 */
+  let tables = $state<TableItem[]>([]);
+  /** `dict_list()`：把记录里的 `dicts[].name` 映射成"现在还在不在"（缺失时提示） */
+  let dicts = $state<DictItem[]>([]);
+  let tablesError = $state('');
+  let tableBusy = $state('');
+  /** 等待确认删除的表名（null = 没有待确认的删除） */
+  let pendingTableDelete = $state<string | null>(null);
+
+  // ------------------------------------------------- 相加
+  /** 勾选要相加的表身份（`作用域/类型`） */
+  let composePicks = $state<string[]>([]);
+  /** 新作用域的名字 */
+  let composeName = $state('');
+  let composeBusy = $state(false);
+  let composeError = $state('');
+  let composeDone = $state('');
 
   let notice = $state('');
   let noticeTone = $state<'info' | 'error' | 'success'>('info');
 
-  /** 编辑中的阈值（排名 / 等分模式用），切方法时由 effect 从生效值填入 */
+  /** 编辑中的阈值（排名 / 前% / 等分模式用），切方法时由 effect 从生效值填入 */
   let wordBounds = $state<number[]>([]);
   let charBounds = $state<number[]>([]);
+  /** 编辑中的**前%上界**（0..100），前%模式用 */
+  let pctBounds = $state<number[]>([]);
   /** 编辑中的覆盖率目标（0..1），覆盖率模式用 */
   let coverage = $state<number[]>([]);
 
-  /** 覆盖率曲线缓存（全库词表 / 字表） */
+  /** 覆盖率曲线缓存（主作用域的词表 / 字表） */
   let curves = $state<{ word: TierCurve | null; char: TierCurve | null }>({ word: null, char: null });
   let curveBusy = $state(false);
   let curveError = $state('');
@@ -125,42 +188,78 @@
 
   // ---------------------------------------------------------------- 派生
 
+  /** 分组标签（展示用；本地化在 `i18n.svelte.ts::tierLabels()`） */
   const names = $derived(tierNamesOf(meta));
 
-  const domains = $derived.by(() => {
-    const fromMeta = (meta?.domains ?? []).map((domain) => domain.name);
-    const fromTables = (meta?.tables ?? [])
-      .filter((table) => table.path.startsWith('domains/'))
-      .map((table) => table.path.split('/')[1]);
-    return [...new Set([...fromMeta, ...fromTables])];
-  });
+  /** 七组稳定标识：取色与身份都走它，不走组名 */
+  const keys = $derived(tierKeysFrom(meta));
 
-  const fullTables = $derived((meta?.tables ?? []).filter((table) => table.path.startsWith('full/')));
+  /** 全部作用域（表侧），`full` 优先 */
+  const scopes = $derived(metaScopes(meta));
 
-  const domainRows = $derived.by(() => {
-    if (!meta) return [] as DomainRow[];
-    const list: DomainRow[] = [];
-    for (const name of domains) {
-      const word = meta.tables.find((table) => table.path === `domains/${name}/word`);
-      const char = meta.tables.find((table) => table.path === `domains/${name}/char`);
-      if (word || char) list.push({ domain: name, word, char });
+  /** 主作用域名（用户指定的那张；未指定时 `full` 优先） */
+  const primary = $derived(primaryScope(meta));
+
+  /**
+   * 当前激活表的产物目录绝对路径（`tier_curve` 这类按目录定位的命令要用它）。
+   * 规则见 bridge.ts 的 `activeTableDir()`。
+   */
+  const currentDir = $derived(activeTableDir(library));
+
+  /** 本页展示的一行：一个作用域 × 一种类型 */
+  type Row = { scope: string; table: TableMeta; isPrimary: boolean };
+
+  const rows = $derived.by(() => {
+    const list: Row[] = [];
+    for (const scope of scopes) {
+      for (const kind of ['word', 'char'] as const) {
+        const table = meta?.tables.find((x) => x.path === scope && x.kind === kind);
+        if (table) list.push({ scope, table, isPrimary: scope === primary });
+      }
     }
-    return list;
+    // 主作用域那两张排最前，其余按作用域名
+    return list.sort((a, b) => {
+      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+      return a.scope.localeCompare(b.scope) || a.table.kind.localeCompare(b.table.kind);
+    });
   });
 
-  const tableCount = $derived((meta?.tables ?? []).length);
-
-  const enabledCount = $derived.by(() => {
-    if (!meta) return 0;
-    const enabled = appSettings.value.enabledTables;
-    if (!enabled || enabled.length === 0) return meta.tables.length;
-    return meta.tables.filter((table) => enabled.includes(table.path)).length;
+  /**
+   * 数据文件夹里现存的词库名（含文件名去后缀与 `dict.name`）。
+   *
+   * 表里记录的 `dicts[].name` 对着它查一遍，就能在界面上说"这份词库还在不在"——
+   * `binding` 已经从后端拿到了结论，这里只是给同义词/改名的情况兜个底。
+   */
+  const knownDictNames = $derived.by(() => {
+    const out = new Set<string>();
+    for (const item of dicts) {
+      out.add(item.file_name);
+      if (item.file_name.endsWith('.dict')) out.add(item.file_name.slice(0, -'.dict'.length));
+      if (item.dict.id) out.add(item.dict.id);
+      if (item.dict.name) out.add(item.dict.name);
+    }
+    return out;
   });
+
+  /** 该表的词条数：取 `meta.tables` 里 `kind === 'word'` 的那张 */
+  function tableEntries(item: TableItem): number | null {
+    return wordEntriesOf(item.meta);
+  }
+
+  /** 该表记录的词库链里，现在已经不在数据文件夹里的那些名字 */
+  function absentDicts(item: TableItem): string[] {
+    const refs = item.meta?.tokenizer.dicts ?? [];
+    return refs
+      .map((ref) => ref.name || ref.id)
+      .filter((name) => !!name && !knownDictNames.has(name));
+  }
 
   const method = $derived<TierMethod>(
-    appSettings.value.tierMethod === 'coverage' || appSettings.value.tierMethod === 'even'
+    appSettings.value.tierMethod === 'rank' ||
+      appSettings.value.tierMethod === 'coverage' ||
+      appSettings.value.tierMethod === 'even'
       ? appSettings.value.tierMethod
-      : 'rank'
+      : 'top_pct'
   );
 
   /** 覆盖率目标：用户没填时用 meta 默认分档的累计覆盖率 */
@@ -174,7 +273,7 @@
     if (!meta) return [] as Preview[];
     const out: Preview[] = [];
     for (const kind of ['word', 'char'] as const) {
-      const table = findTable(meta.tables, kind);
+      const table = findTable(meta.tables, kind, primary);
       const info = activeBoundsInfo(kind, meta);
       const bounds = info.bounds;
       const total = table?.total_tokens ?? 0;
@@ -184,7 +283,7 @@
       const grouped = groupTokens(table, bounds, complete ? curve : null, total);
 
       let cumulative = 0;
-      const rows: PreviewRow[] = [];
+      const previewRows: PreviewRow[] = [];
       // 预览用的「有效上界」：超过表的总词条数的阈值夹到词条总数，否则像演示数据
       // （57 条词、阈值 100/1000/5000…）会把 7 组全压进第 1 组，预览看不出任何信息。
       // 注意：真正的分组判定（token 着色 / 排行榜）只用 bounds，不受这个夹取影响。
@@ -195,30 +294,35 @@
         const group = groupedPreview.bands[index] ?? { entries: 0, tokens: 0 };
         const share = total > 0 ? groupedPreview.bands[index].tokens / total : 0;
         cumulative += share;
-        rows.push({
+        previewRows.push({
           index,
           name,
           range:
             index >= TIER_BOUND_COUNT
-              ? `> ${(bounds[bounds.length - 1] ?? 0).toLocaleString('zh-CN')}`
-              : `≤ ${(bounds[index] ?? 0).toLocaleString('zh-CN')}`,
+              ? `> ${formatCount(bounds[bounds.length - 1] ?? 0)}`
+              : `≤ ${formatCount(bounds[index] ?? 0)}`,
           entries: group.entries,
           coverage: share,
           cumulative: Math.min(1, cumulative),
-          source: complete ? '曲线' : table?.tier_stats[index] ? '按分档比例估算' : '—',
+          source: complete
+            ? t('tables.sourceCurve')
+            : table?.tier_stats[index]
+              ? t('tables.sourceEstimated')
+              : '—',
         });
       });
 
       const skipped = bounds.filter((value) => value > entries).length;
       const capNote =
         skipped > 0
-          ? `有 ${skipped} 个阈值大于这张表的词条数（${formatInt(entries)} 条），预览里已夹到词条总数；真实分组判定不受影响。`
+          ? t('tables.previewCapNote', { skipped, entries: formatInt(entries) })
           : '';
       out.push({
         kind,
-        rows,
+        rows: previewRows,
         bounds,
-        warning: [info.warning, capNote].filter(Boolean).join(' '),
+        warning: info.warning,
+        capNote,
       });
     }
     return out;
@@ -234,6 +338,18 @@
     }))
   );
 
+  /** 反解预览（前%口径）：前%上界 → 排名上界 */
+  const solvedPct = $derived.by(() =>
+    (['word', 'char'] as const).map((kind) => {
+      const table = findTable(meta?.tables ?? [], kind, primary);
+      const entries = table?.entries ?? 0;
+      const ranks = pctBounds.map((p) =>
+        entries > 0 ? Math.max(1, Math.ceil((p / 100) * entries)) : 0
+      );
+      return { kind, ranks };
+    })
+  );
+
   // ---------------------------------------------------------------- 生命周期
 
   $effect(() => {
@@ -243,7 +359,7 @@
   // 切到「按排名 / 等分」时，把编辑框填成当前生效值
   $effect(() => {
     const current = meta;
-    if (!current || method === 'coverage') return;
+    if (!current || method === 'coverage' || method === 'top_pct') return;
     wordBounds = activeBoundsInfo('word', current).bounds;
     charBounds = activeBoundsInfo('char', current).bounds;
   });
@@ -254,40 +370,128 @@
     coverage = [...effectiveCoverage];
   });
 
-  // 覆盖率模式需要曲线；进入该模式且已装载产物时拉一次（Rust 侧按产物缓存）
+  // 切到「按前%」时，把编辑框填成设置里的值（没有就用**主表**记的默认口径）
+  $effect(() => {
+    if (method !== 'top_pct') return;
+    const custom = appSettings.value.tierPct;
+    const table = findTable(meta?.tables ?? [], 'word', primary);
+    pctBounds = custom && custom.length > 0 ? [...custom] : [...(table?.tier_pct ?? defaultTierPct('word'))];
+  });
+
+  // 覆盖率 / 前% 模式需要曲线（后者只在用户想看"覆盖了多少正文"时用）
   $effect(() => {
     if (method !== 'coverage') return;
-    if (!statusDir) return;
-    // 依赖：只有 curves 为空时才真正发请求；已经拿到就直接用
+    if (!currentDir) return;
     void autoFetchCurves();
   });
 
   async function bootstrap() {
     loading = true;
     loadError = '';
-    const status = await datasetStatus(appSettings.value.dataDir ?? appSettings.value.corpusDir);
-    if (!status.ok) {
-      loading = false;
-      loadError = status.error;
-      return;
-    }
-    if (!status.data.meta) {
-      loading = false;
-      meta = null;
-      return;
-    }
-    statusDir = status.data.dir;
-    meta = status.data.meta;
-    datasetLoaded = false;
-    datasetLoadError = '';
-    const opened = await openDataset(status.data.dir);
-    if (opened.ok) {
-      datasetLoaded = true;
-      meta = opened.data;
+    tablesError = '';
+
+    // 数据文件夹状况 + 词表清单 + 词库清单（词表清单要用词库清单判断"词库还在不在"）
+    const [infoRes, tablesRes, dictsRes] = await Promise.all([
+      libraryInfo(),
+      tableList(),
+      dictList(),
+    ]);
+    if (infoRes.ok) library = infoRes.data;
+    if (tablesRes.ok) {
+      tables = tablesRes.data;
+      if (pendingTableDelete && !tables.some((table) => table.name === pendingTableDelete)) {
+        pendingTableDelete = null;
+      }
     } else {
-      datasetLoadError = opened.error;
+      tablesError = tablesRes.error;
     }
+    if (dictsRes.ok) dicts = dictsRes.data;
+
+    // 当前打开的那张表的 meta：**取**后端的，不再自己拼 settings.dataDir 的路径。
+    // dataDir 现在是「数据文件夹」（里面是 dicts\ 与 tables\），它下面没有 meta.json，
+    // 拼出来必然是 exists: false，于是页面永远显示"尚未打开词频表"。
+    const current = await activeDataset();
+    if (!current.ok) {
+      loadError = current.error;
+      loading = false;
+      return;
+    }
+    meta = current.data;
+    // 后端在启动 / 激活时已经按 meta.tokenizer 的词库链重建过分词器了，这里只需取 meta
     loading = false;
+  }
+
+  // ---------------------------------------------------------------- 词表管理
+
+  /** 重新拉一次数据文件夹状况与词表清单 */
+  async function refreshTables() {
+    const [infoRes, tablesRes, dictsRes] = await Promise.all([
+      libraryInfo(),
+      tableList(),
+      dictList(),
+    ]);
+    if (infoRes.ok) library = infoRes.data;
+    if (tablesRes.ok) {
+      tables = tablesRes.data;
+      if (pendingTableDelete && !tables.some((table) => table.name === pendingTableDelete)) {
+        pendingTableDelete = null;
+      }
+    }
+    if (dictsRes.ok) dicts = dictsRes.data;
+  }
+
+  /** 激活某张表：后端会按它记录的词库链重建分词器，并把 meta 换成这张表的 */
+  async function activateTable(item: TableItem) {
+    tableBusy = item.name;
+    const res = await activateLibraryTable(item.name);
+    tableBusy = '';
+    if (!res.ok) {
+      showNotice(t('tables.library.activateFailed', { name: item.name, error: res.error }), 'error');
+      return;
+    }
+    // 曲线是按产物缓存的，换了表要重新拉
+    curves = { word: null, char: null };
+    curveError = '';
+    await refreshTables();
+    meta = res.data;
+    showNotice(t('tables.library.activated', { name: item.name }), 'success');
+  }
+
+  /**
+   * 重新统计：把该表的语料库与参数放进「一次性交接单」，再跳到扫描页。
+   *
+   * 为什么不在本页直接起扫描：扫描表单（线程 / HMM / 分域勾选 …）是扫描页的状态，
+   * 在这里复制一份必然漂移。交接单的说明见 `$lib/scan-prefill.svelte.ts`。
+   */
+  function rescanTable(item: TableItem) {
+    const tokenizer = item.meta?.tokenizer;
+    requestScanPrefill({
+      corpus: item.meta?.corpus_root ?? '',
+      tableName: item.name,
+      // 用该表记录的词库链预勾选（名字就是 `dicts\` 下的文件名）；空数组 = 用全部
+      dictFiles: tokenizer
+        ? tokenizer.dicts.map((ref) => ref.name || ref.id).filter(Boolean)
+        : [],
+    });
+    window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: 'wordfreq' }));
+  }
+
+  /** 删除某张表（只有 `in_library === true` 才给这个入口） */
+  async function deleteTable(item: TableItem) {
+    tableBusy = item.name;
+    const res = await tableDelete(item.name);
+    tableBusy = '';
+    if (!res.ok) {
+      showNotice(t('tables.library.deleteFailed', { name: item.name, error: res.error }), 'error');
+      return;
+    }
+    pendingTableDelete = null;
+    await refreshTables();
+    // 删掉的可能正是当前激活的那张（后端会把激活项清掉）→ 重新取一次 meta
+    const current = await activeDataset();
+    meta = current.ok ? current.data : null;
+    curves = { word: null, char: null };
+    showNotice(t('tables.library.deleted', { name: item.name }), 'success');
   }
 
   async function autoFetchCurves() {
@@ -296,12 +500,12 @@
   }
 
   async function fetchCurves() {
-    const dir = statusDir;
+    const dir = currentDir;
     curveBusy = true;
     curveError = '';
     const [word, char] = await Promise.all([
-      ensureCurve('full/word', dir, 600),
-      ensureCurve('full/char', dir, 600),
+      ensureCurve(tableKey(primary, 'word'), dir, 600),
+      ensureCurve(tableKey(primary, 'char'), dir, 600),
     ]);
     if (word.ok) curves.word = word.data;
     if (char.ok) curves.char = char.data;
@@ -310,7 +514,42 @@
     else if (!char.ok) curveError = char.error;
   }
 
-  // ---------------------------------------------------------------- 表开关
+  // ---------------------------------------------------------------- 绑定状态
+
+  /**
+   * 绑定状态 → 徽标样式与文案 key。
+   *
+   * 词库外置之后，**一张表的频次是否可信**取决于它记录的词库链现在还成不成立。
+   * 所以四种状态各有颜色与文案，不能只给个图标。
+   */
+  function bindingTone(binding: Binding): 'ok' | 'warn' | 'error' {
+    if (binding.kind === 'ok') return 'ok';
+    if (binding.kind === 'missing') return 'error';
+    return 'warn';
+  }
+
+  function bindingLabelKey(binding: Binding): MessageKey {
+    if (binding.kind === 'ok') return 'tables.binding.ok';
+    if (binding.kind === 'legacy') return 'tables.binding.legacy';
+    if (binding.kind === 'drifted') return 'tables.binding.drifted';
+    return 'tables.binding.missing';
+  }
+
+  /** 绑定异常的详细一行（列出变了 / 缺了的词库名） */
+  function bindingDetail(binding: Binding): string {
+    if (binding.kind === 'drifted') {
+      return t('tables.binding.driftedDetail', {
+        changed: binding.changed.join(t('common.listSeparator')) || '—',
+      });
+    }
+    if (binding.kind === 'missing') {
+      return t('tables.binding.missingDetail', {
+        missing: binding.missing.join(t('common.listSeparator')) || '—',
+      });
+    }
+    if (binding.kind === 'legacy') return t('tables.binding.legacyDetail');
+    return '';
+  }
 
   function showNotice(message: string, tone: 'info' | 'error' | 'success' = 'info') {
     notice = message;
@@ -320,52 +559,69 @@
     }, 4000);
   }
 
-  function tableEnabled(path: string): boolean {
-    const enabled = appSettings.value.enabledTables;
-    if (!enabled || enabled.length === 0) return true;
-    return enabled.includes(path);
-  }
+  // ---------------------------------------------------------------- 主词频表
 
-  function toggleTable(path: string, checked: boolean) {
-    if (!meta) return;
-    const current = appSettings.value.enabledTables;
-    const list =
-      !current || current.length === 0 ? meta.tables.map((table) => table.path) : [...current];
-    const next = checked
-      ? [...new Set([...list, path])]
-      : list.filter((item) => item !== path);
-    void persist(
-      { enabledTables: next },
-      `已${checked ? '启用' : '停用'}「${path}」。划句分析的分域对比与排行榜会随之变化。`
-    );
-  }
-
-  function applyPreset(kind: 'all' | 'none' | 'full' | 'word' | 'char') {
-    if (!meta) return;
-    const all = meta.tables.map((table) => table.path);
-    let next: string[];
-    let message: string;
-    if (kind === 'all') {
-      next = all;
-      message = `已全选 ${all.length} 张表。`;
-    } else if (kind === 'none') {
-      next = [];
-      message = '已全不选：空列表在后端等同于「全部启用」，相当于重置。';
-    } else if (kind === 'full') {
-      next = all.filter((path) => path.startsWith('full/'));
-      message = `只留全库表（${next.length} 张）。`;
-    } else if (kind === 'word') {
-      next = all.filter((path) => path.endsWith('/word'));
-      message = `只留词表（${next.length} 张）。`;
-    } else {
-      next = all.filter((path) => path.endsWith('/char'));
-      message = `只留字表（${next.length} 张）。`;
+  /** 把某个作用域设为主表（词表与字表一起换，口径只能有一套） */
+  async function makePrimary(scope: string) {
+    if (scope === primary) return;
+    tableBusy = `primary:${scope}`;
+    const res = await setPrimaryScope(scope);
+    tableBusy = '';
+    if (!res.ok) {
+      showNotice(t('tables.primaryFailed', { scope, error: res.error }), 'error');
+      return;
     }
-    void persist({ enabledTables: next }, `${message}划句分析的分域对比与排行榜会随之变化。`);
+    meta = res.data;
+    curves = { word: null, char: null };
+    showNotice(t('tables.primarySet', { scope }), 'success');
   }
 
-  function resetEnabled() {
-    void persist({ enabledTables: null }, '已重置为「全部启用」（enabledTables = null）。');
+  // ---------------------------------------------------------------- 相加
+
+  function toggleComposePick(key: string) {
+    composePicks = composePicks.includes(key)
+      ? composePicks.filter((item) => item !== key)
+      : [...composePicks, key];
+  }
+
+  /** 勾选里的表种类（相加一次只处理一类；混着选会在后端被拒） */
+  const composeKinds = $derived([...new Set(composePicks.map((k) => k.split('/').pop() ?? ''))]);
+
+  async function runCompose() {
+    if (composePicks.length === 0) {
+      composeError = t('tables.compose.needPick');
+      return;
+    }
+    if (composeKinds.length > 1) {
+      composeError = t('tables.compose.mixedKinds');
+      return;
+    }
+    composeBusy = true;
+    composeError = '';
+    composeDone = '';
+    const res = await composeTables({
+      sources: composePicks,
+      scope: composeName.trim() || t('tables.compose.defaultName'),
+      kind: composeKinds[0] || null,
+    });
+    composeBusy = false;
+    if (!res.ok) {
+      composeError = res.error;
+      return;
+    }
+    const scope = res.data[0]?.scope ?? composeName;
+    composeDone = t('tables.compose.done', {
+      scope,
+      kinds: res.data.map((c) => (c.kind === 'char' ? t('table.char') : t('table.word'))).join(' / '),
+      entries: formatInt(res.data[0]?.entries ?? 0),
+    });
+    composePicks = [];
+    composeName = '';
+    // 新表要立刻出现在清单与作用域选择里
+    await refreshTables();
+    const current = await activeDataset();
+    meta = current.ok ? current.data : meta;
+    showNotice(t('tables.compose.doneShort', { scope }), 'success');
   }
 
   // ---------------------------------------------------------------- 分组设置
@@ -375,7 +631,7 @@
     const res = await updateSettings(part);
     saving = false;
     if (!res.ok) {
-      showNotice(`保存失败：${res.error}`, 'error');
+      showNotice(t('tables.saveFailed', { error: res.error }), 'error');
       return;
     }
     showNotice(message, 'success');
@@ -383,7 +639,10 @@
 
   function switchMethod(next: TierMethod) {
     if (next === method) return;
-    void persist({ tierMethod: next }, `分组方法已切换为「${METHOD_LABELS[next]}」。`);
+    void persist(
+      { tierMethod: next },
+      t('tables.methodSwitched', { method: t(METHOD_LABELS[next]) })
+    );
   }
 
   function updateBound(kind: 'word' | 'char', index: number, raw: string) {
@@ -392,13 +651,22 @@
       const next = [...wordBounds];
       next[index] = value;
       wordBounds = next;
-      void persist({ tierWordBounds: next }, '词表阈值已保存。');
+      void persist({ tierWordBounds: next }, t('tables.wordBoundsSaved'));
     } else {
       const next = [...charBounds];
       next[index] = value;
       charBounds = next;
-      void persist({ tierCharBounds: next }, '字表阈值已保存。');
+      void persist({ tierCharBounds: next }, t('tables.charBoundsSaved'));
     }
+  }
+
+  /** 改一个前%上界（输入是百分数，存的是百分数 0..100） */
+  function updatePctBound(index: number, raw: string) {
+    const value = Math.min(100, Math.max(0, Number(raw) || 0));
+    const next = [...pctBounds];
+    next[index] = value;
+    pctBounds = next;
+    void persist({ tierPct: next }, t('tables.pctBoundsSaved'));
   }
 
   function updateCoverage(index: number, raw: string) {
@@ -406,17 +674,21 @@
     const next = [...coverage];
     next[index] = value;
     coverage = next;
-    void persist({ tierCoverage: next }, '覆盖率目标已保存。');
+    void persist({ tierCoverage: next }, t('tables.coverageSaved'));
   }
 
-  function resetBounds(kind: 'word' | 'char' | 'coverage') {
+  function resetBounds(kind: 'word' | 'char' | 'coverage' | 'pct') {
     if (kind === 'coverage') {
-      void persist({ tierCoverage: null }, '已恢复默认覆盖率目标（取自 meta 的累计覆盖率）。');
+      void persist({ tierCoverage: null }, t('tables.coverageReset'));
+      return;
+    }
+    if (kind === 'pct') {
+      void persist({ tierPct: null }, t('tables.pctBoundsReset'));
       return;
     }
     void persist(
       kind === 'word' ? { tierWordBounds: null } : { tierCharBounds: null },
-      `${kind === 'word' ? '词表' : '字表'}阈值已恢复为 meta 默认值。`
+      kind === 'word' ? t('tables.wordBoundsReset') : t('tables.charBoundsReset')
     );
   }
 
@@ -425,7 +697,12 @@
     const word = curves.word;
     const char = curves.char;
     if (!word || !char) {
-      showNotice(`拿不到覆盖率曲线，无法反解${curveError ? `：${curveError}` : '。'}`, 'error');
+      showNotice(
+        curveError
+          ? t('tables.solveFailedWithError', { error: curveError })
+          : t('tables.solveFailed'),
+        'error'
+      );
       return;
     }
     const targets = [...coverage];
@@ -440,7 +717,22 @@
         tierMethod: 'rank',
         tierCoverage: targets,
       },
-      `已用覆盖率曲线反解成排名阈值（词表：${wordRanks.map(formatInt).join(' / ')}），并切回「按排名」。`
+      t('tables.solved', { ranks: wordRanks.map(formatInt).join(' / ') })
+    );
+  }
+
+  /** 把「前%」口径反解成绝对排名，存进 rank 口径（两条路都能走，给用户一个退路） */
+  async function solveFromPct() {
+    const ranks = solvedPct.map((item) => item.ranks);
+    const wordRanks = ranks[0] ?? [];
+    const charRanks = ranks[1] ?? [];
+    void persist(
+      {
+        tierWordBounds: wordRanks,
+        tierCharBounds: charRanks,
+        tierMethod: 'rank',
+      },
+      t('tables.solved', { ranks: wordRanks.map(formatInt).join(' / ') })
     );
   }
 
@@ -504,16 +796,19 @@
     return { bands, truncated: lower < table.entries };
   }
 
-  function rowLabel(path: string): string {
-    const kind = path.endsWith('/char') ? '字表' : '词表';
-    if (path.startsWith('full/')) return `全库 · ${kind}`;
-    return `${path.split('/')[1]} · ${kind}`;
+  function rowLabel(table: TableMeta): string {
+    return table.kind === 'char' ? t('table.char') : t('table.word');
   }
 
   /** 该表最后一组（最少见的那一档）的覆盖率 */
   function lastTierCoverage(table: TableMeta): number {
     const stat = table.tier_stats[table.tier_stats.length - 1];
     return stat?.coverage ?? 0;
+  }
+
+  /** 这张表是相加出来的吗（有来源就是） */
+  function isComposed(table: TableMeta): boolean {
+    return (table.source_tables?.length ?? 0) > 0;
   }
 
   function goWordFreq() {
@@ -524,7 +819,7 @@
 <div class="flex flex-col gap-4">
   {#if !isTauri()}
     <div class="rounded-lg border border-dashed border-border bg-surface-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      浏览器预览模式：表清单与开关读写的是内置演示数据（仅内存），分组设置同样只保存在内存里。
+      {t('tables.browserPreview')}
     </div>
   {/if}
 
@@ -547,380 +842,740 @@
   {#if loading}
     <Card>
       <CardContent class="py-8 text-center text-xs text-muted-foreground">
-        正在读取产物目录与设置…
-      </CardContent>
-    </Card>
-  {:else if loadError}
-    <Card class="border-destructive/30">
-      <CardContent class="py-6 text-xs text-destructive">读取数据集状态失败：{loadError}</CardContent>
-    </Card>
-  {:else if !meta}
-    <Card class="border-dashed">
-      <CardHeader>
-        <CardTitle>还没有可管理的表</CardTitle>
-        <CardDescription>
-          表清单来自 meta.json（`meta.tables`）。请先在「生成词频表」页产出一份结果。
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex gap-2">
-        <Button onclick={goWordFreq}>去生成词频表</Button>
-        <Button variant="outline" onclick={() => void bootstrap()}>重新检查</Button>
+        {t('tables.loading')}
       </CardContent>
     </Card>
   {:else}
-    {#if !datasetLoaded}
-      <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-        <p class="font-medium">产物目录尚未装载到后端</p>
-        <p class="mt-0.5">
-          已找到 meta.json（{statusDir}），但 `open_dataset` 未成功{datasetLoadError ? `：${datasetLoadError}` : '。'}。
-          表清单仍可管理，但 `tier_curve` 可能拿不到曲线。
-        </p>
-      </div>
-    {/if}
-
-    <!-- ============================ A. 表清单与开关 ============================ -->
-    <Card data-testid="table-list-card">
+    <!-- ==================== 词表库（数据文件夹 tables\） ==================== -->
+    <Card data-testid="library-tables-card">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>表清单与开关</CardTitle>
-          <Badge variant="secondary" data-testid="table-count">{formatInt(tableCount)} 张表</Badge>
-          <Badge variant="outline">已启用 {formatInt(enabledCount)} 张</Badge>
-          {#if saving}<Badge variant="outline">保存中…</Badge>{/if}
-        </div>
-        <CardDescription>
-          关掉某张表 = 它不参与「划句分析」的分域对比与「排行榜」。全库表（full/word、full/char）始终用于
-          单个词 / 字的总体频率查询——关掉它只会让它不参与分域对比，不会让正文整片变成「未收录」。
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
-        <div class="flex flex-wrap items-center gap-1.5">
-          <span class="mr-1 text-xs font-medium">快捷选择</span>
-          <Button variant="outline" size="sm" onclick={() => applyPreset('all')}>全选</Button>
-          <Button variant="outline" size="sm" onclick={() => applyPreset('none')}>全不选</Button>
-          <Button variant="outline" size="sm" onclick={() => applyPreset('full')}>只留全库</Button>
-          <Button variant="outline" size="sm" onclick={() => applyPreset('word')}>只留词表</Button>
-          <Button variant="outline" size="sm" onclick={() => applyPreset('char')}>只留字表</Button>
-          <Button variant="ghost" size="sm" onclick={resetEnabled}>
-            重置为全部启用
+          <CardTitle>{t('tables.library.title')}</CardTitle>
+          <Badge variant="secondary">{t('tables.library.countBadge', { count: formatInt(tables.length) })}</Badge>
+          {#if tables.find((table) => table.active)}
+            <Badge variant="outline">
+              {t('tables.library.activeBadge', { name: tables.find((table) => table.active)?.name ?? '' })}
+            </Badge>
+          {/if}
+          <Button variant="outline" size="sm" class="ml-auto" onclick={() => void refreshTables()}>
+            {t('tables.recheck')}
           </Button>
         </div>
+        <CardDescription>{t('tables.library.description')}</CardDescription>
+      </CardHeader>
+      <CardContent class="flex flex-col gap-3">
+        {#if library}
+          <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <span>{t('tables.library.dataDir', { dir: library.root })}</span>
+            {#if library.is_default}
+              <Badge variant="outline">{t('dicts.defaultLocation')}</Badge>
+            {/if}
+          </div>
+        {/if}
 
-        <p class="rounded-md bg-surface-muted/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-          注意：开关变化后，<b>划句分析的分域对比与排行榜会随之变化</b>（后端按 `enabledTables` 过滤分域排名）。
-          全库表的总体频率查询不受影响。
-        </p>
-
-        <div class="scrollbar-thin max-h-[30rem] overflow-auto rounded-lg border border-border">
-          <table class="w-full border-collapse text-xs">
-            <thead class="sticky top-0 z-10 bg-surface-muted text-muted-foreground">
-              <tr>
-                <th class="px-3 py-2 text-left font-medium">表</th>
-                <th class="px-3 py-2 text-right font-medium">词条数</th>
-                <th class="px-3 py-2 text-right font-medium">总 token</th>
-                <th class="px-3 py-2 text-right font-medium">.vfr 体积</th>
-                <th class="px-3 py-2 text-right font-medium">最后一组覆盖率</th>
-                <th class="px-3 py-2 text-right font-medium">启用</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each fullTables as table (table.path)}
-                <tr class="border-t border-border/70" data-table-row={table.path}>
-                  <td class="px-3 py-2">
-                    <span class="font-medium">{rowLabel(table.path)}</span>
-                    <span class="ml-2 font-mono text-[11px] text-muted-foreground">{table.path}</span>
-                  </td>
-                  <td class="px-3 py-2 text-right tabular-nums">{formatInt(table.entries)}</td>
-                  <td class="px-3 py-2 text-right tabular-nums">{formatInt(table.total_tokens)}</td>
-                  <td class="px-3 py-2 text-right tabular-nums">{formatBytes(table.vfr_bytes)}</td>
-                  <td class="px-3 py-2 text-right tabular-nums">
-                    {formatRatio(lastTierCoverage(table), { digits: 3 })}
-                  </td>
-                  <td class="px-3 py-2">
-                    <span class="flex justify-end">
-                      <Switch
-                        checked={tableEnabled(table.path)}
-                        onCheckedChange={(checked) => toggleTable(table.path, checked)}
-                        aria-label={`启用 ${table.path}`}
-                      />
-                    </span>
-                  </td>
-                </tr>
-              {/each}
-
-              <tr class="border-t-2 border-border bg-surface-muted/40">
-                <td colspan="6" class="px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
-                  各分域（domains/）
-                </td>
-              </tr>
-
-              {#each domainRows as row (row.domain)}
-                {#each [row.word, row.char].filter((item) => item !== undefined) as table (table.path)}
-                  <tr class="border-t border-border/70" data-table-row={table.path}>
-                    <td class="px-3 py-2">
-                      <span class="font-medium">{rowLabel(table.path)}</span>
-                      <span class="ml-2 font-mono text-[11px] text-muted-foreground">{table.path}</span>
-                    </td>
-                    <td class="px-3 py-2 text-right tabular-nums">{formatInt(table.entries)}</td>
-                    <td class="px-3 py-2 text-right tabular-nums">{formatInt(table.total_tokens)}</td>
-                    <td class="px-3 py-2 text-right tabular-nums">{formatBytes(table.vfr_bytes)}</td>
-                    <td class="px-3 py-2 text-right tabular-nums">
-                      {formatRatio(lastTierCoverage(table), { digits: 3 })}
-                    </td>
-                    <td class="px-3 py-2">
-                      <span class="flex justify-end">
-                        <Switch
-                          checked={tableEnabled(table.path)}
-                          onCheckedChange={(checked) => toggleTable(table.path, checked)}
-                          aria-label={`启用 ${table.path}`}
-                        />
-                      </span>
-                    </td>
-                  </tr>
-                {/each}
-              {/each}
-            </tbody>
-          </table>
-        </div>
-
-        {#if tableCount !== 16}
-          <p class="text-[11px] text-muted-foreground">
-            提示：完整产物是 2 种类型 × 8 个作用域 = 16 张表（全库 + 7 个分域），当前 meta.json 里登记了
-            {tableCount} 张——说明扫描时用了 `--skip-domain-tables` 或只统计了部分分域。
+        {#if tablesError}
+          <p class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {t('tables.library.loadFailed', { error: tablesError })}
           </p>
         {/if}
-      </CardContent>
-    </Card>
 
-    <!-- ============================ B. 分组自定义 ============================ -->
-    <Card data-testid="tier-config-card">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>分组自定义</CardTitle>
-          <Badge variant="outline">七组</Badge>
-          <Badge variant="secondary">{METHOD_LABELS[method]}</Badge>
-        </div>
-        <CardDescription>
-          七组的名字固定（{names.join(' / ')}），这里定的是每组的<b>排名上界</b>：第 1..6 组各有一个上界，
-          第 7 组自动是「以上全部」。
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-4">
-        <!-- 方法切换 -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs font-medium">分组方法</span>
-          <div class="flex flex-wrap gap-1.5">
-            {#each ['rank', 'coverage', 'even'] as TierMethod[] as item (item)}
-              <button
-                type="button"
-                data-testid={`method-${item}`}
-                aria-pressed={method === item}
-                class={cn(
-                  'rounded-md border px-3 py-1.5 text-xs transition-colors',
-                  method === item
-                    ? 'border-primary/40 bg-primary/10 font-medium text-primary'
-                    : 'border-border hover:bg-accent'
-                )}
-                onclick={() => switchMethod(item)}
-              >
-                {METHOD_LABELS[item]}
-              </button>
+        <!-- 当前激活表的绑定状态：词库外置之后最关键的一块，必须显眼 -->
+        {#if library && library.active_binding}
+          {@const tone = bindingTone(library.active_binding)}
+          <div
+            class={cn(
+              'rounded-lg border px-3 py-2 text-xs',
+              tone === 'ok'
+                ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400'
+                : tone === 'warn'
+                  ? 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'
+                  : 'border-destructive/40 bg-destructive/5 text-destructive'
+            )}
+            data-testid="active-binding"
+          >
+            <p class="font-medium">
+              {t('tables.library.activeBinding', { label: t(bindingLabelKey(library.active_binding)) })}
+            </p>
+            {#if bindingDetail(library.active_binding)}
+              <p class="mt-0.5">{bindingDetail(library.active_binding)}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- `library_info().active_warnings`：打开表时攒下的告警，直接显示出来 -->
+        {#if library && library.active_warnings.length > 0}
+          <ul
+            class="flex flex-col gap-0.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300"
+            data-testid="active-warnings"
+          >
+            {#each library.active_warnings as warning, index (index)}
+              <li>⚠ {warning}</li>
             {/each}
-          </div>
-          <div class="rounded-lg border border-border bg-surface-muted/40 px-3 py-2 text-[11px] leading-relaxed">
-            <p><span class="font-medium">在做什么：</span>{METHOD_NOTES[method].what}</p>
-            <p class="mt-1"><span class="font-medium">什么时候用：</span>{METHOD_NOTES[method].when}</p>
-          </div>
-        </div>
+          </ul>
+        {/if}
 
-        <Separator />
+        {#if tables.length === 0}
+          <p class="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
+            {t('tables.library.empty')}
+          </p>
+        {/if}
 
-        <!-- 编辑区 -->
-        {#if method === 'coverage'}
-          <div class="flex flex-col gap-3">
+        {#each tables as item (item.path)}
+          {@const tone = bindingTone(item.binding)}
+          {@const missing = absentDicts(item)}
+          <div
+            class={cn(
+              'flex flex-col gap-2 rounded-lg border p-3',
+              item.active ? 'border-primary/40 bg-primary/5' : 'border-border'
+            )}
+            data-library-table={item.name}
+          >
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs font-medium">累计覆盖率目标（%）</span>
-              <span class="text-[11px] text-muted-foreground">
-                第 7 组固定是「以上全部」，所以只填 6 个，且必须严格递增
+              <span class="font-medium">{item.name}</span>
+              {#if item.active}
+                <Badge variant="success">{t('tables.library.active')}</Badge>
+              {/if}
+              <Badge variant="outline">{t(ORIGIN_LABELS[item.origin])}</Badge>
+              {#if !item.in_library}
+                <Badge variant="outline">{t('tables.library.external')}</Badge>
+              {/if}
+              <span class="text-[11px] text-muted-foreground" data-testid="library-table-entries">
+                {#if tableEntries(item) === null}
+                  {t('tables.library.entriesUnavailable')}
+                {:else}
+                  {t('dicts.entries', { count: formatInt(tableEntries(item) ?? 0) })}
+                {/if}
               </span>
-              <span class="ml-auto flex gap-1">
-                <Button variant="outline" size="sm" onclick={() => void solveFromCurve()}>
-                  一键用当前覆盖率反解成排名阈值
+              <span class="ml-auto flex flex-wrap items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={item.active || tableBusy === item.name}
+                  onclick={() => void activateTable(item)}
+                >
+                  {t('tables.library.activate')}
                 </Button>
-                <Button variant="ghost" size="sm" onclick={() => resetBounds('coverage')}>恢复默认</Button>
+                <Button variant="outline" size="sm" onclick={() => rescanTable(item)}>
+                  {t('tables.library.rescan')}
+                </Button>
+                <Button variant="ghost" size="sm" onclick={() => void openExternal(item.path)}>
+                  {t('tables.library.openDir')}
+                </Button>
+                <!-- 数据文件夹之外的表不给删除：那个目录不归我们管 -->
+                {#if item.in_library}
+                  <Button
+                    variant={pendingTableDelete === item.name ? 'destructive' : 'ghost'}
+                    size="sm"
+                    disabled={tableBusy === item.name}
+                    onclick={() => (pendingTableDelete = pendingTableDelete === item.name ? null : item.name)}
+                  >
+                    {t('tables.library.delete')}
+                  </Button>
+                {/if}
               </span>
             </div>
 
-            <div class="flex flex-wrap gap-2">
-              {#each coverage as value, index (index)}
-                <label class="flex flex-col gap-1">
-                  <span class="text-[11px] text-muted-foreground">第 {index + 1} 组</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    class="w-24 rounded border border-input bg-surface px-2 py-1 text-right text-xs tabular-nums"
-                    data-testid={`coverage-${index}`}
-                    value={(value * 100).toFixed(2)}
-                    onchange={(event) => updateCoverage(index, event.currentTarget.value)}
-                    aria-label={`第 ${index + 1} 组累计覆盖率`}
-                  />
-                </label>
-              {/each}
+            <p class="selectable truncate font-mono text-[11px] text-muted-foreground">{item.path}</p>
+
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span>{t('tables.library.corpus', { corpus: item.meta?.corpus_root || '—' })}</span>
+              <span>
+                {t('tables.library.generated', {
+                  generated: item.meta ? formatTimestamp(item.meta.generated_at) : '—',
+                })}
+              </span>
             </div>
 
-            {#if curveError}
-              <p class="text-[11px] text-destructive">曲线加载失败：{curveError}</p>
-            {:else if curveBusy}
-              <p class="text-[11px] text-muted-foreground">正在读取覆盖率曲线…</p>
-            {:else}
-              <p class="text-[11px] text-muted-foreground">
-                曲线：{curves.word ? `${formatInt(curves.word.points.length)} 点` : '—'}（词表）·
-                {curves.char ? `${formatInt(curves.char.points.length)} 点` : '—'}（字表）·
-                Rust 侧按产物缓存，重复进入本页不会重算。
+            {#if item.error}
+              <p class="rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+                {t('tables.library.tableError', { error: item.error })}
               </p>
             {/if}
 
-            <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              {#each solved as item (item.kind)}
-                <div class="rounded-lg border border-border p-3">
-                  <p class="mb-2 text-xs font-medium">
-                    {item.kind === 'word' ? '词表反解结果' : '字表反解结果'}
-                  </p>
-                  <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-                    {#each item.ranks as rank, index (index)}
-                      <span>
-                        <span class="text-muted-foreground">第 {index + 1} 组 ≤</span>
-                        <span class="ml-1 tabular-nums font-medium" data-testid={`solved-${item.kind}-${index}`}>
-                          {rank === null ? '—' : formatInt(rank)}
+            <p
+              class={cn(
+                'rounded-md border px-2 py-1.5 text-[11px]',
+                tone === 'ok'
+                  ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400'
+                  : tone === 'warn'
+                    ? 'border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300'
+                    : 'border-destructive/40 bg-destructive/5 text-destructive'
+              )}
+              data-binding-kind={item.binding.kind}
+            >
+              <span class="font-medium">{t(bindingLabelKey(item.binding))}</span>
+              {#if bindingDetail(item.binding)}
+                <span class="ml-1">{bindingDetail(item.binding)}</span>
+              {/if}
+              {#if tone !== 'ok'}
+                <Button variant="ghost" size="sm" class="ml-1.5 h-6 px-2 text-[11px]" onclick={() => rescanTable(item)}>
+                  {t('tables.library.rescanSuggestion')}
+                </Button>
+              {/if}
+            </p>
+
+            {#if item.meta && item.meta.tokenizer.dicts.length > 0}
+              <p class="text-[11px] text-muted-foreground">
+                {t('tables.library.dictChain', {
+                  chain: item.meta.tokenizer.dicts
+                    .map((ref) => ref.name || ref.id || '—')
+                    .join(t('common.listSeparator')),
+                })}
+                {#if missing.length > 0}
+                  <span class="text-destructive">
+                    {t('tables.library.absentDicts', { names: missing.join(t('common.listSeparator')) })}
+                  </span>
+                {/if}
+              </p>
+            {/if}
+
+            {#if pendingTableDelete === item.name}
+              <div
+                class="flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+                data-testid="table-delete-confirm"
+              >
+                <p class="font-medium">{t('tables.library.confirmDeleteTitle', { name: item.name })}</p>
+                <p>{t('tables.library.confirmDeleteNote')}</p>
+                <span class="flex gap-1.5">
+                  <Button variant="destructive" size="sm" disabled={tableBusy === item.name} onclick={() => void deleteTable(item)}>
+                    {t('tables.library.confirmDeleteYes')}
+                  </Button>
+                  <Button variant="outline" size="sm" onclick={() => (pendingTableDelete = null)}>
+                    {t('common.cancel')}
+                  </Button>
+                </span>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </CardContent>
+    </Card>
+
+    {#if loadError}
+      <Card class="border-destructive/30">
+        <CardContent class="py-6 text-xs text-destructive">
+          {t('tables.loadFailed', { error: loadError })}
+        </CardContent>
+      </Card>
+    {/if}
+
+    {#if !meta}
+      <Card class="border-dashed">
+        <CardHeader>
+          <CardTitle>{t('tables.emptyTitle')}</CardTitle>
+          <CardDescription>{t('tables.emptyDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent class="flex gap-2">
+          <Button onclick={goWordFreq}>{t('tables.goWordFreq')}</Button>
+          <Button variant="outline" onclick={() => void bootstrap()}>{t('tables.recheck')}</Button>
+        </CardContent>
+      </Card>
+    {:else}
+      {@const segPrimary = splitMessage('tables.primaryDescription', ['emphasis'], {
+        emphasis: t('tables.primaryEmphasis'),
+      })}
+      {@const segTierDesc = splitMessage('tables.tierConfigDescription', ['emphasis'], {
+        names: names.join(' / '),
+        emphasis: t('tables.rankUpperBound'),
+      })}
+
+      <!-- ==================== A. 频率表（全部作用域，平等） ==================== -->
+      <Card data-testid="table-list-card">
+        <CardHeader>
+          <div class="flex flex-wrap items-center gap-2">
+            <CardTitle>{t('tables.listTitle')}</CardTitle>
+            <Badge variant="secondary" data-testid="table-count">
+              {t('tables.tableCountBadge', { count: formatInt(rows.length) })}
+            </Badge>
+            <Badge variant="outline">{t('tables.scopeCountBadge', { count: formatInt(scopes.length) })}</Badge>
+            <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
+            {#if saving}<Badge variant="outline">{t('tables.saving')}</Badge>{/if}
+          </div>
+          <CardDescription>
+            {segPrimary[0]}<b>{segPrimary[1]}</b>{segPrimary[2]}
+          </CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <div class="scrollbar-thin max-h-[30rem] overflow-auto rounded-lg border border-border">
+            <table class="w-full border-collapse text-xs">
+              <thead class="sticky top-0 z-10 bg-surface-muted text-muted-foreground">
+                <tr>
+                  <th class="px-3 py-2 text-left font-medium">{t('tables.col.scope')}</th>
+                  <th class="px-3 py-2 text-left font-medium">{t('tables.col.kind')}</th>
+                  <th class="px-3 py-2 text-right font-medium">{t('tables.col.entries')}</th>
+                  <th class="px-3 py-2 text-right font-medium">{t('tables.col.tokens')}</th>
+                  <th class="px-3 py-2 text-right font-medium">{t('tables.col.vfr')}</th>
+                  <th class="px-3 py-2 text-right font-medium">{t('tables.col.lastCoverage')}</th>
+                  <th class="px-3 py-2 text-left font-medium">{t('tables.col.source')}</th>
+                  <th class="px-3 py-2 text-center font-medium">{t('tables.col.primary')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each rows as row (tableKey(row.scope, row.table.kind))}
+                  <tr
+                    class={cn('border-t border-border/70', row.isPrimary && 'bg-primary/5')}
+                    data-table-row={tableKey(row.scope, row.table.kind)}
+                  >
+                    <td class="px-3 py-2">
+                      <span class="font-medium">{row.scope}</span>
+                      <span class="ml-2 font-mono text-[11px] text-muted-foreground"
+                        >{tableKey(row.scope, row.table.kind)}</span
+                      >
+                    </td>
+                    <td class="px-3 py-2">{rowLabel(row.table)}</td>
+                    <td class="px-3 py-2 text-right tabular-nums">{formatInt(row.table.entries)}</td>
+                    <td class="px-3 py-2 text-right tabular-nums">{formatInt(row.table.total_tokens)}</td>
+                    <td class="px-3 py-2 text-right tabular-nums">{formatBytes(row.table.vfr_bytes)}</td>
+                    <td class="px-3 py-2 text-right tabular-nums">
+                      {formatRatio(lastTierCoverage(row.table), { digits: 3 })}
+                    </td>
+                    <td class="px-3 py-2">
+                      {#if isComposed(row.table)}
+                        <span
+                          class="rounded border border-primary/40 px-1.5 py-0.5 text-[11px] text-primary"
+                          title={(row.table.source_tables ?? []).join(' + ')}
+                        >
+                          {t('tables.sourceComposed', { count: row.table.source_tables?.length ?? 0 })}
                         </span>
-                      </span>
+                      {:else}
+                        <span class="text-[11px] text-muted-foreground">{t('tables.sourceScanned')}</span>
+                      {/if}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      <input
+                        type="radio"
+                        name="primary-scope"
+                        class="size-3.5 accent-[var(--primary)]"
+                        checked={row.isPrimary}
+                        disabled={tableBusy === `primary:${row.scope}`}
+                        onchange={() => void makePrimary(row.scope)}
+                        aria-label={t('tables.primaryAria', { scope: row.scope })}
+                        data-primary-radio={row.scope}
+                      />
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+
+          <p class="rounded-md bg-surface-muted/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            {t('tables.equalNote')}
+          </p>
+        </CardContent>
+      </Card>
+
+      <!-- ==================== B. 相加 ==================== -->
+      <Card data-testid="compose-card">
+        <CardHeader>
+          <div class="flex flex-wrap items-center gap-2">
+            <CardTitle>{t('tables.compose.title')}</CardTitle>
+            {#if composePicks.length > 0}
+              <Badge variant="secondary">
+                {t('tables.compose.pickedBadge', { count: formatInt(composePicks.length) })}
+              </Badge>
+            {/if}
+            {#if composeBusy}<Badge variant="outline">{t('tables.compose.running')}</Badge>{/if}
+          </div>
+          <CardDescription>{t('tables.compose.description')}</CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-3">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="mr-1 text-xs font-medium">{t('tables.compose.pickLabel')}</span>
+            {#each rows as row (tableKey(row.scope, row.table.kind))}
+              {@const key = tableKey(row.scope, row.table.kind)}
+              <button
+                type="button"
+                aria-pressed={composePicks.includes(key)}
+                class={cn(
+                  'rounded-md border px-2.5 py-1 text-xs transition-colors',
+                  composePicks.includes(key)
+                    ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+                    : 'border-border hover:bg-accent'
+                )}
+                onclick={() => toggleComposePick(key)}
+                data-compose-pick={key}
+              >
+                {key}
+                <span class="ml-1 text-[10px] text-muted-foreground">{formatInt(row.table.entries)}</span>
+              </button>
+            {/each}
+          </div>
+
+          <div class="flex flex-wrap items-end gap-2">
+            <label class="flex flex-col gap-1">
+              <span class="text-[11px] text-muted-foreground">{t('tables.compose.nameLabel')}</span>
+              <input
+                type="text"
+                class="w-56 rounded border border-input bg-surface px-2 py-1 text-xs"
+                placeholder={t('tables.compose.namePlaceholder')}
+                bind:value={composeName}
+                data-testid="compose-name"
+              />
+            </label>
+            <Button
+              size="sm"
+              disabled={composeBusy || composePicks.length === 0}
+              onclick={() => void runCompose()}
+            >
+              {composeBusy ? t('tables.compose.running') : t('tables.compose.run')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={composeBusy || composePicks.length === 0}
+              onclick={() => {
+                composePicks = [];
+                composeError = '';
+              }}
+            >
+              {t('common.clear')}
+            </Button>
+          </div>
+
+          {#if composeError}
+            <p class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive" data-testid="compose-error">
+              {composeError}
+            </p>
+          {/if}
+          {#if composeDone}
+            <p class="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400" data-testid="compose-done">
+              {composeDone}
+            </p>
+          {/if}
+
+          <p class="text-[11px] leading-relaxed text-muted-foreground">
+            {t('tables.compose.note')}
+          </p>
+        </CardContent>
+      </Card>
+
+      <!-- ==================== C. 分组自定义 ==================== -->
+      <Card data-testid="tier-config-card">
+        <CardHeader>
+          <div class="flex flex-wrap items-center gap-2">
+            <CardTitle>{t('tables.tierConfigTitle')}</CardTitle>
+            <Badge variant="outline">{t('tables.tierCountBadge')}</Badge>
+            <Badge variant="secondary">{t(METHOD_LABELS[method])}</Badge>
+            <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
+          </div>
+          <CardDescription>
+            {segTierDesc[0]}<b>{segTierDesc[1]}</b>{segTierDesc[2]}
+          </CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-4">
+          <!-- 方法切换 -->
+          <div class="flex flex-col gap-2">
+            <span class="text-xs font-medium">{t('tables.methodLabel')}</span>
+            <div class="flex flex-wrap gap-1.5">
+              {#each ['top_pct', 'rank', 'coverage', 'even'] as TierMethod[] as item (item)}
+                <button
+                  type="button"
+                  data-testid={`method-${item}`}
+                  aria-pressed={method === item}
+                  class={cn(
+                    'rounded-md border px-3 py-1.5 text-xs transition-colors',
+                    method === item
+                      ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+                      : 'border-border hover:bg-accent'
+                  )}
+                  onclick={() => switchMethod(item)}
+                >
+                  {t(METHOD_LABELS[item])}
+                </button>
+              {/each}
+            </div>
+            <div class="rounded-lg border border-border bg-surface-muted/40 px-3 py-2 text-[11px] leading-relaxed">
+              <p>
+                <span class="font-medium">{t('tables.whatLabel')}</span>{t(METHOD_NOTES[method].what)}
+              </p>
+              <p class="mt-1">
+                <span class="font-medium">{t('tables.whenLabel')}</span>{t(METHOD_NOTES[method].when)}
+              </p>
+            </div>
+          </div>
+
+          <Separator />
+
+          <!-- 编辑区 -->
+          {#if method === 'top_pct'}
+            <div class="flex flex-col gap-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-medium">{t('tables.pctBoundsTitle')}</span>
+                <span class="text-[11px] text-muted-foreground">{t('tables.pctBoundsHint')}</span>
+                <span class="ml-auto flex gap-1">
+                  <Button variant="ghost" size="sm" onclick={() => resetBounds('pct')}>
+                    {t('tables.resetDefault')}
+                  </Button>
+                </span>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                {#each Array.from({ length: TIER_BOUND_COUNT }, (_, i) => i) as index (index)}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-[11px] text-muted-foreground"
+                      >{t('tables.groupN', { index: index + 1 })}</span
+                    >
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.001"
+                      class="w-28 rounded border border-input bg-surface px-2 py-1 text-right text-xs tabular-nums"
+                      data-testid={`pct-bound-${index}`}
+                      value={pctBounds[index] ?? 0}
+                      onchange={(event) => updatePctBound(index, event.currentTarget.value)}
+                      aria-label={t('tables.pctBoundAria', { index: index + 1 })}
+                    />
+                  </label>
+                {/each}
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {#each solvedPct as item (item.kind)}
+                  <div class="rounded-lg border border-border p-3">
+                    <p class="mb-2 text-xs font-medium">
+                      {item.kind === 'word'
+                        ? t('tables.solvedWordTitle')
+                        : t('tables.solvedCharTitle')}
+                    </p>
+                    <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                      {#each item.ranks as rank, index (index)}
+                        <span>
+                          <span class="text-muted-foreground"
+                            >{t('tables.groupUpperLe', { index: index + 1 })}</span
+                          >
+                          <span class="ml-1 tabular-nums font-medium" data-testid={`solved-pct-${item.kind}-${index}`}>
+                            {rank === 0 ? '—' : formatInt(rank)}
+                          </span>
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+
+              <p class="text-[11px] text-muted-foreground">
+                {t('tables.pctNote', { entries: formatInt(findTable(meta.tables, 'word', primary)?.entries ?? 0) })}
+              </p>
+            </div>
+          {:else if method === 'coverage'}
+            <div class="flex flex-col gap-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-medium">{t('tables.coverageTargetLabel')}</span>
+                <span class="text-[11px] text-muted-foreground">
+                  {t('tables.coverageTargetHint')}
+                </span>
+                <span class="ml-auto flex gap-1">
+                  <Button variant="outline" size="sm" onclick={() => void solveFromCurve()}>
+                    {t('tables.solveButton')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onclick={() => resetBounds('coverage')}
+                    >{t('tables.resetDefault')}</Button
+                  >
+                </span>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                {#each coverage as value, index (index)}
+                  <label class="flex flex-col gap-1">
+                    <span class="text-[11px] text-muted-foreground"
+                      >{t('tables.groupN', { index: index + 1 })}</span
+                    >
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      class="w-24 rounded border border-input bg-surface px-2 py-1 text-right text-xs tabular-nums"
+                      data-testid={`coverage-${index}`}
+                      value={(value * 100).toFixed(2)}
+                      onchange={(event) => updateCoverage(index, event.currentTarget.value)}
+                      aria-label={t('tables.groupCoverageAria', { index: index + 1 })}
+                    />
+                  </label>
+                {/each}
+              </div>
+
+              {#if curveError}
+                <p class="text-[11px] text-destructive">
+                  {t('tables.curveLoadFailed', { error: curveError })}
+                </p>
+              {:else if curveBusy}
+                <p class="text-[11px] text-muted-foreground">{t('tables.curveLoading')}</p>
+              {:else}
+                <p class="text-[11px] text-muted-foreground">
+                  {t('tables.curveSummary', {
+                    word: curves.word
+                      ? t('tables.curvePoints', { count: formatInt(curves.word.points.length) })
+                      : '—',
+                    char: curves.char
+                      ? t('tables.curvePoints', { count: formatInt(curves.char.points.length) })
+                      : '—',
+                  })}
+                </p>
+              {/if}
+
+              <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {#each solved as item (item.kind)}
+                  <div class="rounded-lg border border-border p-3">
+                    <p class="mb-2 text-xs font-medium">
+                      {item.kind === 'word' ? t('tables.solvedWordTitle') : t('tables.solvedCharTitle')}
+                    </p>
+                    <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                      {#each item.ranks as rank, index (index)}
+                        <span>
+                          <span class="text-muted-foreground"
+                            >{t('tables.groupUpperLe', { index: index + 1 })}</span
+                          >
+                          <span class="ml-1 tabular-nums font-medium" data-testid={`solved-${item.kind}-${index}`}>
+                            {rank === null ? '—' : formatInt(rank)}
+                          </span>
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {#each ['word', 'char'] as const as kind (kind)}
+                {@const bounds = kind === 'word' ? wordBounds : charBounds}
+                <div class="flex flex-col gap-2 rounded-lg border border-border p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-medium"
+                      >{kind === 'word' ? t('tables.wordBoundsTitle') : t('tables.charBoundsTitle')}</span
+                    >
+                    <span class="text-[11px] text-muted-foreground">{t('tables.sixBoundsHint')}</span>
+                    <Button variant="ghost" size="sm" class="ml-auto" onclick={() => resetBounds(kind)}>
+                      {t('tables.resetDefault')}
+                    </Button>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    {#each Array.from({ length: TIER_BOUND_COUNT }, (_, i) => i) as index (index)}
+                      <label class="flex flex-col gap-1">
+                        <span class="text-[11px] text-muted-foreground"
+                          >{t('tables.groupN', { index: index + 1 })}</span
+                        >
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          class="w-24 rounded border border-input bg-surface px-2 py-1 text-right text-xs tabular-nums"
+                          data-testid={`${kind}-bound-${index}`}
+                          value={bounds[index] ?? 0}
+                          onchange={(event) => updateBound(kind, index, event.currentTarget.value)}
+                          aria-label={t('tables.boundAria', {
+                            kind: kind === 'word' ? t('table.word') : t('table.char'),
+                            index: index + 1,
+                          })}
+                        />
+                      </label>
                     {/each}
                   </div>
+                  <p class="text-[11px] text-muted-foreground">
+                    {t('tables.group7Note', { count: formatCount(bounds[bounds.length - 1] ?? 0) })}
+                  </p>
+                  <Button variant="outline" size="sm" class="self-start" onclick={() => void solveFromPct()}>
+                    {t('tables.solveFromPct')}
+                  </Button>
                 </div>
               {/each}
             </div>
-          </div>
-        {:else}
-          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {#each ['word', 'char'] as const as kind (kind)}
-              {@const bounds = kind === 'word' ? wordBounds : charBounds}
-              <div class="flex flex-col gap-2 rounded-lg border border-border p-3">
+          {/if}
+
+          <Separator />
+
+          <!-- 实时预览 -->
+          <div class="flex flex-col gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-medium">{t('tables.previewTitle')}</span>
+              <span class="text-[11px] text-muted-foreground">{t('tables.previewHint')}</span>
+            </div>
+
+            {#each previews as preview (preview.kind)}
+              <div class="flex flex-col gap-2">
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-xs font-medium">{kind === 'word' ? '词表阈值' : '字表阈值'}</span>
-                  <span class="text-[11px] text-muted-foreground">6 个排名上界</span>
-                  <Button variant="ghost" size="sm" class="ml-auto" onclick={() => resetBounds(kind)}>
-                    恢复默认
-                  </Button>
+                  <span class="text-xs font-medium"
+                    >{preview.kind === 'word' ? t('tables.wordPreview') : t('tables.charPreview')}</span
+                  >
+                  {#if preview.warning || preview.capNote}
+                    <span
+                      class="rounded border border-amber-500/40 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-400"
+                      data-testid={`warning-${preview.kind}`}
+                    >
+                      {[
+                        preview.warning ? t(preview.warning.key, preview.warning.params) : '',
+                        preview.capNote,
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    </span>
+                  {/if}
                 </div>
-                <div class="flex flex-wrap gap-2">
-                  {#each Array.from({ length: TIER_BOUND_COUNT }, (_, i) => i) as index (index)}
-                    <label class="flex flex-col gap-1">
-                      <span class="text-[11px] text-muted-foreground">第 {index + 1} 组</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        class="w-24 rounded border border-input bg-surface px-2 py-1 text-right text-xs tabular-nums"
-                        data-testid={`${kind}-bound-${index}`}
-                        value={bounds[index] ?? 0}
-                        onchange={(event) => updateBound(kind, index, event.currentTarget.value)}
-                        aria-label={`${kind === 'word' ? '词表' : '字表'}第 ${index + 1} 组排名上界`}
-                      />
-                    </label>
-                  {/each}
+                <div class="scrollbar-thin overflow-auto rounded-lg border border-border">
+                  <table class="w-full border-collapse text-xs" data-testid={`preview-${preview.kind}`}>
+                    <thead class="bg-surface-muted/60 text-muted-foreground">
+                      <tr>
+                        <th class="px-3 py-2 text-left font-medium">{t('tables.preview.col.name')}</th>
+                        <th class="px-3 py-2 text-right font-medium">{t('tables.preview.col.range')}</th>
+                        <th class="px-3 py-2 text-right font-medium">{t('tables.preview.col.entries')}</th>
+                        <th class="px-3 py-2 text-right font-medium">{t('tables.preview.col.coverage')}</th>
+                        <th class="px-3 py-2 text-right font-medium">{t('tables.preview.col.cumulative')}</th>
+                        <th class="px-3 py-2 text-right font-medium">{t('tables.preview.col.source')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each preview.rows as row (row.index)}
+                        {@const palette = paletteForTierKey(tierKeyAt(row.index, keys))}
+                        <tr class="border-t border-border/70" data-preview-row={row.name}>
+                          <td class="px-3 py-2">
+                            <span class="inline-flex items-center gap-1.5">
+                              <span
+                                class="inline-block size-3 shrink-0 rounded-[3px] border"
+                                style={swatchStyle(palette, dark)}
+                              ></span>
+                              <span class="font-medium">{row.name}</span>
+                              {#if method === 'top_pct'}
+                                <span class="text-[11px] text-muted-foreground">
+                                  {formatTopPercent(pctBounds[row.index] ?? 0)}
+                                </span>
+                              {/if}
+                            </span>
+                          </td>
+                          <td class="px-3 py-2 text-right tabular-nums text-muted-foreground">{row.range}</td>
+                          <td class="px-3 py-2 text-right tabular-nums">{formatInt(row.entries)}</td>
+                          <td class="px-3 py-2 text-right tabular-nums">
+                            {formatRatio(row.coverage, { digits: 3 })}
+                          </td>
+                          <td class="px-3 py-2 text-right tabular-nums font-medium">
+                            {formatRatio(row.cumulative, { digits: 2 })}
+                          </td>
+                          <td class="px-3 py-2 text-right text-[11px] text-muted-foreground">{row.source}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
                 </div>
-                <p class="text-[11px] text-muted-foreground">
-                  第 7 组 = 「以上全部」（排在
-                  {(bounds[bounds.length - 1] ?? 0).toLocaleString('zh-CN')} 名之后的所有词条）
-                </p>
               </div>
             {/each}
           </div>
-        {/if}
 
-        <Separator />
+          <Separator />
 
-        <!-- 实时预览 -->
-        <div class="flex flex-col gap-2">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-medium">实时预览</span>
-            <span class="text-[11px] text-muted-foreground">
-              改上面的数字会立刻重算；「组内词条数」在无曲线时是估算值，累计覆盖率取自曲线时是精确的
-            </span>
+          <div class="flex flex-col gap-2">
+            <span class="text-xs font-medium">{t('tables.legendTitle')}</span>
+            <TierLegend
+              names={names}
+              keys={keys}
+              bounds={activeBoundsInfo('word', meta).bounds}
+              showUnknown={false}
+            />
+            <p class="text-[11px] text-muted-foreground">{t('tables.applyNote')}</p>
           </div>
-
-          {#each previews as preview (preview.kind)}
-            <div class="flex flex-col gap-2">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-xs font-medium">{preview.kind === 'word' ? '词表' : '字表'}预览</span>
-                {#if preview.warning}
-                  <span
-                    class="rounded border border-amber-500/40 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-400"
-                    data-testid={`warning-${preview.kind}`}
-                  >
-                    {preview.warning}
-                  </span>
-                {/if}
-              </div>
-              <div class="scrollbar-thin overflow-auto rounded-lg border border-border">
-                <table class="w-full border-collapse text-xs" data-testid={`preview-${preview.kind}`}>
-                  <thead class="bg-surface-muted/60 text-muted-foreground">
-                    <tr>
-                      <th class="px-3 py-2 text-left font-medium">组名</th>
-                      <th class="px-3 py-2 text-right font-medium">阈值</th>
-                      <th class="px-3 py-2 text-right font-medium">组内词条数</th>
-                      <th class="px-3 py-2 text-right font-medium">本组覆盖率</th>
-                      <th class="px-3 py-2 text-right font-medium">累计覆盖率</th>
-                      <th class="px-3 py-2 text-right font-medium">来源</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each preview.rows as row (row.name)}
-                      {@const palette = paletteForTierName(row.name)}
-                      <tr class="border-t border-border/70" data-preview-row={row.name}>
-                        <td class="px-3 py-2">
-                          <span class="inline-flex items-center gap-1.5">
-                            <span
-                              class="inline-block size-3 shrink-0 rounded-[3px] border"
-                              style={swatchStyle(palette, dark)}
-                            ></span>
-                            <span class="font-medium">{row.name}</span>
-                          </span>
-                        </td>
-                        <td class="px-3 py-2 text-right tabular-nums text-muted-foreground">{row.range}</td>
-                        <td class="px-3 py-2 text-right tabular-nums">{formatInt(row.entries)}</td>
-                        <td class="px-3 py-2 text-right tabular-nums">
-                          {formatRatio(row.coverage, { digits: 3 })}
-                        </td>
-                        <td class="px-3 py-2 text-right tabular-nums font-medium">
-                          {formatRatio(row.cumulative, { digits: 2 })}
-                        </td>
-                        <td class="px-3 py-2 text-right text-[11px] text-muted-foreground">{row.source}</td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          {/each}
-        </div>
-
-        <Separator />
-
-        <div class="flex flex-col gap-2">
-          <span class="text-xs font-medium">图例效果（词表生效阈值）</span>
-          <TierLegend
-            names={names}
-            bounds={activeBoundsInfo('word', meta).bounds}
-            showUnknown={false}
-          />
-          <p class="text-[11px] text-muted-foreground">
-            设置即时生效并已保存：划句分析页的词条着色、悬停浮层与排行榜的分组列都按这份阈值重算。
-            三个分组字段全是 null / 'rank' 时，界面与 meta 默认分组完全一致。
-          </p>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    {/if}
   {/if}
 </div>

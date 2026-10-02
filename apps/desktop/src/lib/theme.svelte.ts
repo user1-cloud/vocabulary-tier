@@ -1,4 +1,6 @@
 import { emit } from './events';
+import { t } from './i18n.svelte';
+import type { MessageKey } from './messages';
 
 /**
  * 主题状态（Svelte 5 runes，模块级 .svelte.ts 是官方推荐的共享状态写法）。
@@ -105,9 +107,19 @@ export function initTheme(): () => void {
   };
 }
 
-/** 供 UI 显示的中文标签 */
-export const THEME_LABELS: Record<ThemeMode, string> = {
-  light: '浅色',
-  dark: '深色',
-  system: '跟随系统',
+/** 三档主题对应的文案 key（`Record<ThemeMode, …>`：新模式漏配会编译失败） */
+const THEME_KEYS: Record<ThemeMode, MessageKey> = {
+  light: 'theme.light',
+  dark: 'theme.dark',
+  system: 'theme.system',
 };
+
+/**
+ * 供 UI 显示的主题标签。
+ *
+ * 刻意做成函数而不是 `THEME_LABELS` 常量表：常量表在模块加载时求值一次，
+ * 切成英文后界面上还会是中文。这里是响应式读点，切语言会自动跟着变。
+ */
+export function themeLabel(mode: ThemeMode): string {
+  return t(THEME_KEYS[mode]);
+}
