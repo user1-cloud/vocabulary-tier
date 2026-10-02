@@ -858,20 +858,37 @@ fn show_popup(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
         }
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
-    win.show().map_err(|e| format!("显示小窗失败：{e}"))?;
-    let _ = win.set_focus();
-
-    // 关键：把待分析文本**推**给小窗，而不是等它自己来取。
-    //
-    // 小窗关闭时只是隐藏（不销毁），因此它的 JS 只在**第一次**挂载时跑一次。
-    // 若只靠 `take_pending_selection`，第二次按热键时小窗不会重新挂载，
-    // 于是显示的是上一次的旧内容（取过一次后就是空的了）。
+    // 待分析文本要在显示之前取出来：下面的「要不要抢焦点」依赖它。
     let text = app
         .state::<AppState>()
         .pending
         .lock()
         .map(|g| g.clone())
         .unwrap_or_default();
+
+    win.show().map_err(|e| format!("显示小窗失败：{e}"))?;
+
+    // ⚠ 有内容时**不要**抢焦点。
+    //
+    // 踩过的坑：小窗弹出时无条件 set_focus()，用户再按一次热键时前台就是小窗自己，
+    // 取词于是瞄向自己的 WebView2（日志里祖先链全是 BrowserView/BrowserRootView），
+    // 结果永远「没取到内容」，而且 Ctrl+C 会被发给我们自己。
+    //
+    // 现在只在「没取到内容、等用户手输」时才抢焦点——那时用户确实需要键盘焦点。
+    if text.trim().is_empty() {
+        let _ = win.set_focus();
+    } else {
+        log_line(
+            "startup.log",
+            "[小窗] 有内容，保持焦点在用户原来的窗口上（不抢焦点）",
+        );
+    }
+
+    // 把待分析文本**推**给小窗，而不是等它自己来取。
+    //
+    // 小窗关闭时只是隐藏（不销毁），因此它的 JS 只在**第一次**挂载时跑一次。
+    // 若只靠 `take_pending_selection`，第二次按热键时小窗不会重新挂载，
+    // 于是显示的是上一次的旧内容（取过一次后就是空的了）。
     log_line(
         "startup.log",
         &format!("[小窗] 推送待分析文本 {} 字符", text.chars().count()),
@@ -940,6 +957,36 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         // 取词会阻塞几百毫秒（等目标程序写剪贴板），绝不能占着热键回调线程
         let h = handle.clone();
         let run_capture = move || {
+            // ⚠ 先确认前台不是我们自己。
+            //
+            // 小窗弹出时会 set_focus()，之后用户再按热键，前台就是小窗本身；
+            // 那样取词会瞄向自己的 WebView2（祖先链全是 BrowserView/BrowserRootView），
+            // 结果必然是「没取到内容」——实测确实踩到过。
+            // 这里把焦点还给「小窗出现之前用户正在用的窗口」再取词。
+            let fg = capture::foreground_hwnd();
+            if capture::is_own_window(fg) {
+                let prev = h
+                    .state::<AppState>()
+                    .prev_foreground
+                    .lock()
+                    .map(|g| *g)
+                    .unwrap_or(0);
+                if prev != 0 && !capture::is_own_window(prev) {
+                    log_line(
+                        "startup.log",
+                        &format!("[热键] 前台是本应用窗口，先把焦点还给 hwnd={prev} 再取词"),
+                    );
+                    capture::set_foreground(prev);
+                    // 给系统一点时间完成焦点切换，否则选区还挂在旧窗口上
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                } else {
+                    log_line(
+                        "startup.log",
+                        &format!("[热键] 前台是本应用窗口，且没有可归还的目标（prev={prev}）"),
+                    );
+                }
+            }
+
             let (text, reason) = match capture::capture_selection(1000) {
                 Ok(c) => (c.text, c.reason),
                 Err(e) => (String::new(), format!("取词失败：{e}")),

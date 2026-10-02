@@ -576,6 +576,18 @@ mod platform {
         unsafe { GetForegroundWindow() as isize }
     }
 
+    /// 某个窗口是否属于本进程。
+    pub fn is_own_window(hwnd: isize) -> bool {
+        if hwnd == 0 {
+            return false;
+        }
+        unsafe {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd as HWND, &mut pid);
+            pid == std::process::id()
+        }
+    }
+
     /// 把焦点交还给某个窗口（用于隐藏小窗后归还焦点）。
     pub fn set_foreground(hwnd: isize) {
         if hwnd != 0 {
@@ -674,6 +686,9 @@ mod platform {
     pub fn foreground_hwnd() -> isize {
         0
     }
+    pub fn is_own_window(_hwnd: isize) -> bool {
+        false
+    }
     pub fn set_foreground(_hwnd: isize) {}
     pub fn foreground_desc() -> String {
         "<非 Windows 平台>".into()
@@ -690,6 +705,16 @@ mod platform {
     pub fn type_probe_char() -> Result<(), String> {
         Err("非 Windows 平台".into())
     }
+}
+
+/// 某个窗口是否属于本进程。
+///
+/// 用途：小窗弹出后会占着焦点，此时用户再按一次热键，取词就会瞄向**我们自己**
+/// ——实测日志里出现过 `Ctrl+C 将发给 → pid=…（是本应用自己！）标题="VocTier 划句"`，
+/// 以及整条祖先链都是小窗自己的 WebView2 内部视图（`BrowserView`/`BrowserRootView`）。
+/// 所以取词前必须先判断前台是不是自己，是的话把焦点还回去。
+pub fn is_own_window(hwnd: isize) -> bool {
+    platform::is_own_window(hwnd)
 }
 
 /// 当前前台窗口句柄（用于隐藏小窗后归还焦点）。
