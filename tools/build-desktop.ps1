@@ -140,4 +140,41 @@ if (Test-Path $exe) {
 
     Write-Host ''
     Write-Host '可用 .\tools\build-desktop.ps1 -Check 复核构建模式。'
+
+    # ==========================================================================
+    # 把产物复制到「工作区之外」再交给用户运行。
+    #
+    # ⚠ 这一步不是可选项，是**必须**的。
+    #
+    # 原因（排查了很久才定位到）：某些开发环境会给整个仓库目录打上
+    # 「低完整性强制标签」（`Mandatory Label\Low Mandatory Level:(NW)`），
+    # 而 Windows 会让从这种文件启动的进程也运行在**低完整性级别**。
+    # 低完整性进程会被 UIPI 挡住，**无法向普通窗口注入按键**，
+    # 也写不进 %APPDATA% / %LOCALAPPDATA%：
+    #
+    #   * 取词（模拟 Ctrl+C）永远「没取到内容」，而且 SendInput 不报任何错；
+    #   * 日志只能退回程序目录，设置也存不下来；
+    #   * WebView2 在默认位置建不了数据目录（报「拒绝访问」或「灾难性故障」）。
+    #
+    # 复制到工作区外后，进程恢复正常完整性级别，上述问题一次性全部消失。
+    # 实测对比：工作区内 = Low，工作区外 = Medium/High，取词立即成功。
+    # ==========================================================================
+    $runDir = Join-Path $env:USERPROFILE 'VocTier'
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    $runExe = Join-Path $runDir 'voctier-desktop.exe'
+    Copy-Item $exe $runExe -Force
+
+    Write-Host ''
+    Write-Host '✅ 已复制到工作区之外（请运行这一份）：' -ForegroundColor Green
+    Write-Host "   $runExe"
+
+    # 复核副本确实没有低完整性标签
+    $label = (icacls $runExe 2>&1 | Select-String 'Mandatory Label')
+    if ($label) {
+        Write-Host ''
+        Write-Host "⚠ 副本仍带强制标签：$($label.Line.Trim())" -ForegroundColor Yellow
+        Write-Host '  这会导致取词失效（低完整性进程无法向普通窗口注入按键）。'
+    } else {
+        Write-Host '   ✅ 副本无低完整性标签，取词可正常工作'
+    }
 }

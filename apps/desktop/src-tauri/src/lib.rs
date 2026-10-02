@@ -1140,36 +1140,77 @@ fn log_dir() -> PathBuf {
     static RESOLVED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     RESOLVED
         .get_or_init(|| {
-            let mut candidates: Vec<PathBuf> = Vec::new();
+            let mut candidates: Vec<(PathBuf, &'static str)> = Vec::new();
             if let Ok(p) = std::env::var("VOCTIER_LOG_DIR") {
                 if !p.trim().is_empty() {
-                    candidates.push(PathBuf::from(p));
+                    candidates.push((PathBuf::from(p), "VOCTIER_LOG_DIR"));
                 }
             }
-            if let Ok(a) = std::env::var("APPDATA") {
-                if !a.is_empty() {
-                    candidates.push(PathBuf::from(a).join("com.voctier.desktop"));
+            match std::env::var("APPDATA") {
+                Ok(a) if !a.is_empty() => {
+                    candidates.push((PathBuf::from(a).join("com.voctier.desktop"), "%APPDATA%"))
                 }
+                _ => {}
             }
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
-                    candidates.push(dir.join("voctier-logs"));
+                    candidates.push((dir.join("voctier-logs"), "程序所在目录"));
                 }
             }
-            candidates.push(std::env::temp_dir().join("com.voctier.desktop"));
+            candidates.push((
+                std::env::temp_dir().join("com.voctier.desktop"),
+                "临时目录",
+            ));
 
-            for dir in &candidates {
-                if std::fs::create_dir_all(dir).is_err() {
-                    continue;
-                }
-                // 必须真写一个探针文件确认——create_dir_all 成功不代表写得进去
-                let probe = dir.join(".write-probe");
-                if std::fs::write(&probe, b"ok").is_ok() {
-                    let _ = std::fs::remove_file(&probe);
-                    return dir.clone();
+            // 逐个候选探测，并**把每个候选失败的具体原因记下来**。
+            //
+            // 为什么值得这么麻烦：实测出现过「同一个目录，计划任务里的 pwsh 写得进、
+            // 本应用写不进」的情况。只记「用了哪个目录」看不出差别，
+            // 必须把 `create_dir_all` 与写探针各自的错误码都留下才可比较。
+            let mut report = String::new();
+            report.push_str(&format!(
+                "== 日志目录探测 ==\n进程: pid={} exe={:?}\n环境: APPDATA={:?} LOCALAPPDATA={:?} TEMP={:?} USERNAME={:?}\n",
+                std::process::id(),
+                std::env::current_exe().ok(),
+                std::env::var("APPDATA").ok(),
+                std::env::var("LOCALAPPDATA").ok(),
+                std::env::var("TEMP").ok(),
+                std::env::var("USERNAME").ok(),
+            ));
+            let mut chosen: Option<PathBuf> = None;
+            for (dir, why) in &candidates {
+                let line = match std::fs::create_dir_all(dir) {
+                    Err(e) => format!("{why} {dir:?} → 建目录失败：{e}"),
+                    Ok(()) => {
+                        let probe = dir.join(".write-probe");
+                        match std::fs::write(&probe, b"ok") {
+                            Ok(()) => {
+                                let _ = std::fs::remove_file(&probe);
+                                chosen = Some(dir.clone());
+                                format!("{why} {dir:?} → 可写 ✅ 采用")
+                            }
+                            Err(e) => format!("{why} {dir:?} → 写探针失败：{e}"),
+                        }
+                    }
+                };
+                report.push_str(&line);
+                report.push('\n');
+                if chosen.is_some() {
+                    break;
                 }
             }
-            std::env::temp_dir()
+            let dir = chosen.unwrap_or_else(std::env::temp_dir);
+
+            // 把探测报告落到最终选中的目录里，便于事后对比
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("log-dir-probe.log"))
+            {
+                use std::io::Write;
+                let _ = writeln!(f, "{report}");
+            }
+            dir
         })
         .clone()
 }
