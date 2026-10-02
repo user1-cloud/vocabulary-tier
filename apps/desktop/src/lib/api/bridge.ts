@@ -360,8 +360,8 @@ export function defaultSettings(): Settings {
     corpusDir: null,
     dataDir: null,
     hotkey: 'Alt+Q',
-    popupWidth: 420,
-    popupHeight: 320,
+    popupWidth: 480,
+    popupHeight: 420,
     popupOpacity: 0.96,
     popupAlwaysOnTop: true,
     popupAutoCloseMs: 0,
@@ -490,6 +490,41 @@ export async function emitPopupReply(text: string): Promise<Result<null>> {
 export function onPopupReply(handler: (text: string) => void): () => void {
   if (!isTauri()) return () => {};
   return bridgeListen<{ text: string }>(POPUP_REPLY_EVENT, (payload) => handler(payload?.text ?? ''));
+}
+
+// ---------------------------------------------------------------------------
+// 主题跨窗口同步（见 $lib/theme-sync.ts）
+// ---------------------------------------------------------------------------
+
+/** 主题广播事件名（主窗口 ↔ 悬浮小窗） */
+export const THEME_EVENT = 'voctier:theme';
+
+/**
+ * 把主题变化广播给**所有**窗口。
+ *
+ * 用全局 `emit`（不是 `getCurrentWindow().emit()`）：后者只发给本窗口自己，
+ * 跨窗口同步就失效了。payload 用对象包一层，和 `popup:text` 的裸字符串区分开。
+ */
+export async function emitTheme(mode: string): Promise<Result<null>> {
+  if (!isTauri()) return { ok: true, data: null };
+  try {
+    const { emit } = await import('@tauri-apps/api/event');
+    await emit(THEME_EVENT, { theme: mode });
+    return { ok: true, data: null };
+  } catch (error) {
+    return { ok: false, error: toMessage(error) };
+  }
+}
+
+/**
+ * 订阅别的窗口广播来的主题。返回 Promise<UnlistenFn>，与 `onPopupText` 同一套用法。
+ *
+ * 注意：`emit` 是广播，本窗口也会收到自己的那条，调用方必须自己比对当前 mode
+ * （`theme-sync.ts` 里做了）。
+ */
+export async function onTheme(cb: (payload: { theme?: string } | null) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<{ theme?: string }>(THEME_EVENT, (event) => cb(event.payload ?? null));
 }
 
 // ---------------------------------------------------------------------------
@@ -999,8 +1034,8 @@ const MOCK = {
       corpusDir: 'D:\\corpus',
       dataDir: MOCK_DIR,
       hotkey: 'Alt+Q',
-      popupWidth: 420,
-      popupHeight: 320,
+      popupWidth: 480,
+      popupHeight: 420,
       popupOpacity: 0.96,
       popupAlwaysOnTop: true,
       popupAutoCloseMs: 0,

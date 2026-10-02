@@ -19,7 +19,10 @@ node_modules/
 #   /.tmp/  是本地构建临时目录、WebView2 缓存（几百 MB）、应用日志、Playwright
 #           与截图草稿。
 /data/
-/.tmp/
+/.tmp/*
+# 但 .tmp 目录本身必须随仓库存在：.cargo/config.toml 把构建临时目录
+# （TMP/TEMP）钉在这里，目录不存在的话 cl.exe 无处可写（见该配置注释）
+!/.tmp/.gitkeep
 
 # 从语料导出的自定义词典属于派生数据，别入库
 /tools/userdict_*.txt

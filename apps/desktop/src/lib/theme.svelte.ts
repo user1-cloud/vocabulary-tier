@@ -40,11 +40,16 @@ export function resolvedTheme(): ResolvedTheme {
 
 /** 切换到下一档（浅色 → 深色 → 跟随系统） */
 export function cycleTheme(): void {
-  const order: ThemeMode[] = ['light', 'dark', 'system'];
-  const next = order[(order.indexOf(theme.mode) + 1) % order.length];
-  setTheme(next);
+  setTheme(nextThemeMode(theme.mode));
 }
 
+/**
+ * ⚠️ 这个模块只管**本窗口**的主题状态与 DOM class，不做跨窗口同步。
+ *
+ * 跨窗口同步（主窗口 ↔ 悬浮小窗）在 `$lib/theme-sync.ts`：那里同时用了
+ * StorageEvent 与 Tauri 事件总线两条路，并且要用到 `api/bridge`。放在那边
+ * 是为了不让这个被大量组件 import 的模块去拉起 @tauri-apps/api。
+ */
 export function setTheme(mode: ThemeMode): void {
   theme.mode = mode;
   if (typeof localStorage !== 'undefined') {
@@ -56,6 +61,12 @@ export function setTheme(mode: ThemeMode): void {
   }
   applyTheme();
   emit('theme-changed', { theme: mode });
+}
+
+/** 当前 mode 的下一个（浅色 → 深色 → 跟随系统 → 浅色）。小窗的一键切换用它 */
+export function nextThemeMode(mode: ThemeMode): ThemeMode {
+  const order: ThemeMode[] = ['light', 'dark', 'system'];
+  return order[(order.indexOf(mode) + 1) % order.length];
 }
 
 /** 只做 DOM 副作用，不写 localStorage（供 $effect 调用） */

@@ -3,9 +3,17 @@
    * PopupApp —— 悬浮小窗（窗口 label === 'popup'）。
    *
    * 无边框窗口，结构：
-   *   顶部：可拖拽条（data-tauri-drag-region）+ 操作按钮
+   *   顶部：可拖拽条（data-tauri-drag-region）+ 主题切换 + 操作按钮
    *   中部：输入框
-   *   下部：上半 = 着色 token 卡片（可滚动），下半 = **固定位置的词条详情区**（固定高度、独立滚动）
+   *   下部：上半 = 着色 token 卡片（可滚动），下半 = **固定尺寸的词条详情区**
+   *         （固定高度、独立滚动，永远占满剩余空间）
+   *
+   * 缩放时的让位顺序（用户要求）：
+   *   窗口变矮 → 先压缩「着色 token 卡片」，直到它出现滚动条（内容刚好放得下）；
+   *   再继续变矮 → 才开始压缩下面的「词条详情」。
+   *   实现靠 flex：卡片 `flex-1` + `min-h-24`，详情 `h-28 min-h-24 max-h-[55%]`。
+   *   收缩空间先按比例从卡片里扣，卡片到下限之后才轮到详情。
+   *   （实测：480×320 时卡片出现滚动条，480×300 起详情才开始变矮。）
    *
    * 为什么详情是固定区域而不是跟随鼠标的浮层：小窗只有 ~460×340，浮层一靠近
    * 窗口边缘就被裁掉，读不全。固定区域永远在窗口内，内容多了自己滚。
@@ -37,6 +45,10 @@
   } from '$lib/api/bridge';
   import { findTable } from '$lib/format';
   import { cn } from '$lib/utils';
+  import { THEME_LABELS, setTheme, theme } from '$lib/theme.svelte';
+  import { nextThemeMode, themeToggleHint } from '$lib/theme-sync';
+  import IconMoon from '$lib/components/icons/IconMoon.svelte';
+  import IconSun from '$lib/components/icons/IconSun.svelte';
   import {
     activeBounds,
     activeTierIndex,
@@ -88,12 +100,22 @@
   const tierNames = $derived(tierNamesOf(meta));
   const hasTable = $derived(meta !== null);
 
-  /** 当前详情区展示哪一条：钉住的优先，其次最后一次悬停的 */
-  const shownIndex = $derived(pinnedIndex ?? activeIndex);
+  /**
+   * 当前详情区展示哪一条：钉住的优先，其次最后一次悬停的。
+   *
+   * 还没有悬停过时（两个都是 null）显示**结果里的第一条**，而不是空态提示：
+   *   - 小窗底部的区域是固定 112px 高，一段空态提示会把四格数据顶出可视区；
+   *   - 一进来就能看到「排名 / 前 % / 占比」长什么样，比看提示更有用。
+   * 标点等不参与统计的 token 也照样渲染（值为「—」），所以高度不会跳。
+   */
+  const shownIndex = $derived(pinnedIndex ?? activeIndex ?? (tokens.length > 0 ? 0 : null));
   const shownToken = $derived(shownIndex === null ? null : (tokens[shownIndex] ?? null));
 
   // 分组阈值只影响「着色与图例」，不影响查频次是否成功；有设置就用设置
   const settings = $derived(settingsState ?? appSettings.value);
+
+  /** 顶部主题按钮的提示文案：当前档位 + 点一下会切到哪一档 */
+  const themeHint = $derived(themeToggleHint(theme.mode));
 
   /** 一个 token 实际落在哪一组（自定义阈值下与后端给的 tier 不同） */
   function tierNameOfToken(token: TokenInfo): string | null {
@@ -357,7 +379,29 @@
       <span class="truncate text-[10px] text-primary">{notice}</span>
     {/if}
 
-    <span class="ml-auto flex items-center gap-1">
+    <span class="ml-auto flex items-center gap-0.5">
+      <!-- 主题切换：浅色 → 深色 → 跟随系统 循环。
+           写 localStorage 会触发 StorageEvent，Tauri 事件总线再兜一路，
+           两个窗口的主题因此始终一致（见 $lib/theme-sync.ts）。
+           按钮带图标 + 当前档位文字，占位不大，不会把「发回主窗口」挤走。 -->
+      <button
+        type="button"
+        draggable="false"
+        class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        title={`主题：${themeHint}`}
+        aria-label="切换主题"
+        data-testid="popup-theme-toggle"
+        onclick={() => setTheme(nextThemeMode(theme.mode))}
+      >
+        {#if theme.mode === 'dark'}
+          <IconMoon size={12} />
+        {:else if theme.mode === 'light'}
+          <IconSun size={12} />
+        {:else}
+          <span class="text-[10px] leading-none">◐</span>
+        {/if}
+        <span>{THEME_LABELS[theme.mode]}</span>
+      </button>
       <button
         type="button"
         draggable="false"
@@ -415,8 +459,11 @@
     {/if}
   </div>
 
-  <!-- 着色 token 卡片（上半，自己滚动） -->
-  <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+  <!-- 着色 token 卡片（上半，自己滚动）。
+       缩放时第一个让位：flex 先把它的空间扣掉，扣到内容放不下（出现滚动条）为止；
+       再继续变矮才轮到下面的词条详情。
+       min-h-24(96px) 是它的下限：窗口被拖到极限时也别让这一栏彻底消失。 -->
+  <div class="scrollbar-thin flex min-h-24 flex-1 flex-col justify-center overflow-y-auto px-2.5 py-2">
     {#if loading}
       <p class="py-6 text-center text-[11px] text-muted-foreground">正在载入词频表…</p>
     {:else if !hasTable}
@@ -468,26 +515,23 @@
         onPick={(token) => onPick(token)}
       />
 
-      <div class="mt-3 border-t border-border pt-2">
+      <div class="mt-2 border-t border-border pt-1.5">
         <TierLegend
           names={tierNames}
           bounds={wordBounds}
           class="gap-x-2 gap-y-1"
         />
       </div>
-
-      <p class="mt-2 text-[10px] text-muted-foreground">
-        {summary.accepted} 个计入统计的 token · 未收录 {summary.unknownUnique} 种
-        {#if meta}
-          · 词表 {findTable(meta.tables, 'word')?.entries ?? 0} 条
-        {/if}
-      </p>
     {/if}
   </div>
 
-  <!-- 词条详情：固定位置 + 固定高度，内容多了在区域内滚动，永远不会被窗口边缘裁掉 -->
+  <!-- 词条详情：高度与**内容**无关（选中标点还是长词都一样高），恒定 112px。
+       112px 是实测出来的「四格数据 + 徽标行（词典标记）」够用的高度；
+       注意**不能**给它 flex-grow：试过之后窗口一高它就按 55% 抢走半屏，
+       上面那份 token 列表只剩两行（token 列表才是主体内容）。
+       窗口变矮时它是第二个让位的（第一是上面那栏），min-h-24 是它自己的下限。 -->
   <section
-    class="flex h-[124px] shrink-0 flex-col border-t border-border bg-surface-muted/40"
+    class="flex h-28 max-h-28 min-h-24 shrink basis-auto flex-col border-t border-border bg-surface-muted/40"
     data-testid="popup-token-detail"
     aria-label="词条详情"
   >
@@ -502,7 +546,10 @@
           取消钉住
         </button>
       {/if}
-      <span class="ml-auto text-[10px] text-muted-foreground">点词条可钉住</span>
+      <span class="ml-auto text-[10px] text-muted-foreground">
+        {summary.accepted} 词 · 未收录 {summary.unknownUnique} 种{#if meta}
+          · 词表 {findTable(meta.tables, 'word')?.entries ?? 0} 条{/if}
+      </span>
     </div>
     <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-1.5">
       <TokenDetail
@@ -512,7 +559,7 @@
         curves={tierCurves}
         compact
         pinned={pinnedIndex !== null}
-        emptyHint="悬停上方任意词条，这里固定显示它的频次、排名与分组详情。"
+        emptyHint="还没有可显示的词条。"
       />
     </div>
   </section>

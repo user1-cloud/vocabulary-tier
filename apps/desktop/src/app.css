@@ -21,24 +21,26 @@
 :root {
   --radius: 0.625rem;
 
-  /* 基础色板（浅色） */
-  --background: oklch(0.994 0.002 265);
-  --foreground: oklch(0.21 0.02 265);
+  /* 基础色板（浅色）
+     整体比上一版更亮更「白」：底 = 近纯白，卡片 = 纯白，
+     分组的多彩信息只出现在 token / 徽标上，界面本身保持安静。 */
+  --background: oklch(0.985 0.003 265);
+  --foreground: oklch(0.235 0.02 265);
 
   --surface: oklch(1 0 0);
-  --surface-muted: oklch(0.972 0.004 265);
+  --surface-muted: oklch(0.968 0.004 265);
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 265);
+  --card-foreground: oklch(0.235 0.02 265);
 
   --primary: oklch(0.53 0.19 265);
   --primary-foreground: oklch(0.985 0.005 265);
 
   --secondary: oklch(0.965 0.006 265);
-  --secondary-foreground: oklch(0.27 0.02 265);
+  --secondary-foreground: oklch(0.28 0.02 265);
 
   --muted: oklch(0.965 0.006 265);
-  --muted-foreground: oklch(0.53 0.015 265);
+  --muted-foreground: oklch(0.505 0.016 265);
 
   --accent: oklch(0.955 0.014 265);
   --accent-foreground: oklch(0.3 0.03 265);
@@ -51,47 +53,49 @@
   --ring: oklch(0.53 0.19 265);
 
   /* 侧边栏 */
-  --sidebar: oklch(0.976 0.004 265);
-  --sidebar-foreground: oklch(0.27 0.02 265);
+  --sidebar: oklch(0.972 0.004 265);
+  --sidebar-foreground: oklch(0.28 0.02 265);
   --sidebar-accent: oklch(0.935 0.016 265);
   --sidebar-accent-foreground: oklch(0.35 0.13 265);
   --sidebar-border: oklch(0.912 0.007 265);
 }
 
+/* 深色：不再是「近黑」，而是带一点蓝的深灰（背景 #181b20 / 卡片 #23262d）。
+   分层靠 --background < --card < --surface-muted 的亮度差，而不是靠纯黑对比。 */
 .dark {
-  --background: oklch(0.166 0.014 265);
-  --foreground: oklch(0.955 0.005 265);
+  --background: oklch(0.22 0.012 265);
+  --foreground: oklch(0.965 0.004 265);
 
-  --surface: oklch(0.208 0.016 265);
-  --surface-muted: oklch(0.235 0.017 265);
+  --surface: oklch(0.268 0.014 265);
+  --surface-muted: oklch(0.3 0.014 265);
 
-  --card: oklch(0.212 0.016 265);
-  --card-foreground: oklch(0.955 0.005 265);
+  --card: oklch(0.268 0.014 265);
+  --card-foreground: oklch(0.965 0.004 265);
 
-  --primary: oklch(0.68 0.16 265);
-  --primary-foreground: oklch(0.18 0.03 265);
+  --primary: oklch(0.72 0.15 265);
+  --primary-foreground: oklch(0.2 0.03 265);
 
-  --secondary: oklch(0.268 0.018 265);
-  --secondary-foreground: oklch(0.955 0.005 265);
+  --secondary: oklch(0.32 0.016 265);
+  --secondary-foreground: oklch(0.965 0.004 265);
 
-  --muted: oklch(0.268 0.018 265);
-  --muted-foreground: oklch(0.702 0.017 265);
+  --muted: oklch(0.32 0.016 265);
+  --muted-foreground: oklch(0.735 0.015 265);
 
-  --accent: oklch(0.298 0.022 265);
-  --accent-foreground: oklch(0.965 0.01 265);
+  --accent: oklch(0.35 0.022 265);
+  --accent-foreground: oklch(0.975 0.008 265);
 
-  --destructive: oklch(0.66 0.19 22);
+  --destructive: oklch(0.68 0.19 22);
   --destructive-foreground: oklch(0.985 0.005 265);
 
-  --border: oklch(0.302 0.018 265);
-  --input: oklch(0.322 0.018 265);
-  --ring: oklch(0.68 0.16 265);
+  --border: oklch(0.36 0.016 265);
+  --input: oklch(0.375 0.016 265);
+  --ring: oklch(0.72 0.15 265);
 
-  --sidebar: oklch(0.188 0.015 265);
+  --sidebar: oklch(0.245 0.013 265);
   --sidebar-foreground: oklch(0.93 0.006 265);
-  --sidebar-accent: oklch(0.29 0.045 265);
-  --sidebar-accent-foreground: oklch(0.88 0.05 265);
-  --sidebar-border: oklch(0.288 0.018 265);
+  --sidebar-accent: oklch(0.325 0.04 265);
+  --sidebar-accent-foreground: oklch(0.9 0.05 265);
+  --sidebar-border: oklch(0.335 0.016 265);
 }
 
 /* 把令牌暴露给 Tailwind，生成 bg-background / text-muted-foreground 等工具类 */

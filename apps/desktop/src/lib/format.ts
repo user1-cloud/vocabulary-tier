@@ -68,6 +68,29 @@ export function formatPct(value: number | null | undefined): string {
   return `${value.toFixed(5)}%`;
 }
 
+/**
+ * 「前 N%」的自适应精度：排名越靠前，需要的有效位数越多。
+ *
+ * 语料库词表动辄 20 万条，rank 1 的「前 0.0005%」与 rank 200 的「前 0.1%」
+ * 都要看得出量级差别，固定两位小数会把前三万名全压成「0.00%」。
+ */
+export function formatTopPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  if (value <= 0) return '0%';
+  // 有效数字 3 位；再粗就分不出头部排名，再细在小窗里放不下。
+  // 用 toFixed 而不是 toPrecision：后者对 <1e-6 的值会退化成科学计数法（"5.00e-7%"）。
+  const digits =
+    value >= 100 ? 0
+    : value >= 10 ? 1
+    : value >= 1 ? 2
+    : value >= 0.01 ? 3
+    : value >= 0.001 ? 4
+    : value >= 0.0001 ? 5
+    : value >= 0.00001 ? 6
+    : 7;
+  return `${formatNumber(value, digits)}%`;
+}
+
 /** 毫秒 → 「1 分 23 秒」/「820 毫秒」 */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';

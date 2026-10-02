@@ -31,22 +31,33 @@ export type TokenColors = {
   dashed: boolean;
 };
 
-/** 未收录（语料库没有这个词）——浅色 #98A2B3、深色 #667085，背景透明 + 虚线下划线 */
+/** 未收录（语料库没有这个词）——浅色 #2d323c、深色 #d4dced，背景透明 + 虚线下划线 */
 export const UNKNOWN_PALETTE: TierPalette = {
-  lightFg: '#98A2B3',
+  lightFg: '#2d323c',
   lightBg: 'transparent',
-  darkFg: '#667085',
+  darkFg: '#d4dced',
   darkBg: 'transparent',
 };
 
+/*
+ * 七组色阶（2024 版重做）：
+ *
+ *   - 浅色模式 = 「淡色底 + 深色文字」，对底色对比度 ≥ 4.5（WCAG AA 正文）；
+ *   - 深色模式 = 「暗色淡底 + 亮色文字」，对底色对比度 ≈ 3.2~4.0（徽标级别，AA Large）；
+ *   - 七组色相：红 25° → 橙 60° → 黄 90° → 绿 150° → 蓝 258° → 紫 295° → 中性 265°，
+ *     相邻两组色相差 ≥ 30°，图例里一眼能分开；
+ *   - 彩度比上一版低一半左右：底色不再是一块「高饱和色卡」，浅色模式下尤其明显。
+ *
+ * 改这里的颜色时请顺手核一下对比度（底色 / 卡片底），别低于 3:1。
+ */
 export const TIER_PALETTE: Map<string, TierPalette> = new Map<string, TierPalette>([
-  ['极多', { lightFg: '#B42318', lightBg: '#FEE4E2', darkFg: '#FDA29B', darkBg: '#4E1D18' }],
-  ['很多', { lightFg: '#B54708', lightBg: '#FEF0C7', darkFg: '#FEC84B', darkBg: '#4E3200' }],
-  ['较多', { lightFg: '#8A6100', lightBg: '#FEF7C3', darkFg: '#FDE272', darkBg: '#463A00' }],
-  ['中等', { lightFg: '#3B6E1E', lightBg: '#E7F5DC', darkFg: '#A6E36E', darkBg: '#1F3B0E' }],
-  ['较少', { lightFg: '#175CD3', lightBg: '#E0EAFF', darkFg: '#84ADFF', darkBg: '#132A5C' }],
-  ['很少', { lightFg: '#6941C6', lightBg: '#F4EBFF', darkFg: '#C3B5FD', darkBg: '#2D1B69' }],
-  ['极少', { lightFg: '#475467', lightBg: '#F2F4F7', darkFg: '#98A2B3', darkBg: '#33383F' }],
+  ['极多', { lightFg: '#940c19', lightBg: '#ffe8e6', darkFg: '#ffafa6', darkBg: '#502825' }],
+  ['很多', { lightFg: '#611e00', lightBg: '#ffecd7', darkFg: '#ffc588', darkBg: '#482f1a' }],
+  ['较多', { lightFg: '#402900', lightBg: '#fff3ce', darkFg: '#f4d580', darkBg: '#41371b' }],
+  ['中等', { lightFg: '#003b07', lightBg: '#e0f7e4', darkFg: '#a2ecb1', darkBg: '#213926' }],
+  ['较少', { lightFg: '#002e7d', lightBg: '#e3f0ff', darkFg: '#a1daff', darkBg: '#213654' }],
+  ['很少', { lightFg: '#411b7b', lightBg: '#f1edff', darkFg: '#dec4ff', darkBg: '#372f4f' }],
+  ['极少', { lightFg: '#252a34', lightBg: '#ebedf1', darkFg: '#d1d8e5', darkBg: '#383b40' }],
 ]);
 
 /** 图例顺序：以 meta.tier_names 为准，缺省时用这份标准顺序兜底 */

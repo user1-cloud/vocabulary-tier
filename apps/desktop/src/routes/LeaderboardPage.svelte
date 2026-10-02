@@ -36,6 +36,7 @@
     findTable,
     formatInt,
     formatPct,
+    formatTopPercent,
     formatTimestamp,
   } from '$lib/format';
   import { ANALYZE_WORD_EVENT, NAVIGATE_EVENT } from '$lib/navigation';
@@ -299,6 +300,15 @@
   }
 
   /**
+   * 「前 X%」= 排名 ÷ 表内词条总数，与「词条详情」组件里的口径一致
+   * （见 TokenDetail.svelte 的 `topPercent`）。没有排名 / 没有词条数时为 null。
+   */
+  function topPercentOf(rank: number | null | undefined): number | null {
+    if (!rank || rank < 1 || !totalEntries) return null;
+    return (rank / totalEntries) * 100;
+  }
+
+  /**
    * 排名 → 组名（按生效阈值；分组自定义后与后端返回的 `tier_name` 可能不同）。
    * 未收录返回 null。
    */
@@ -552,7 +562,9 @@
                 <th class="w-20 px-3 py-2 text-right font-medium">排名</th>
                 <th class="px-3 py-2 text-left font-medium">词</th>
                 <th class="px-3 py-2 text-right font-medium">频次</th>
-                <th class="px-3 py-2 text-right font-medium">占比</th>
+                <th class="px-3 py-2 text-right font-medium" title="占比 = 该词频次 ÷ 全库表总 token 数（不是词条数的比例）">
+                  占比
+                </th>
                 <th class="px-3 py-2 text-left font-medium">分组</th>
                 <th class="px-3 py-2 text-left font-medium">标记</th>
                 <th class="px-3 py-2 text-right font-medium">操作</th>
@@ -712,17 +724,23 @@
                 第 {(detailTier === null ? detail.tier : tierNames.indexOf(detailTier)) + 1} 组
               </Badge>
             </div>
-            <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+            <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
               <div>
                 <dt class="text-muted-foreground">排名</dt>
                 <dd class="font-medium tabular-nums">#{formatInt(detail.rank)}</dd>
+              </div>
+              <div>
+                <dt class="text-muted-foreground" title="排名 ÷ 该表词条总数">前</dt>
+                <dd class="font-medium tabular-nums">
+                  {formatTopPercent(topPercentOf(detail.rank))}
+                </dd>
               </div>
               <div>
                 <dt class="text-muted-foreground">频次</dt>
                 <dd class="font-medium tabular-nums">{formatInt(detail.count)}</dd>
               </div>
               <div>
-                <dt class="text-muted-foreground">占比</dt>
+                <dt class="text-muted-foreground" title="该词频次 ÷ 全库表总 token 数">占比</dt>
                 <dd class="font-medium tabular-nums">{formatPct(detail.pct)}</dd>
               </div>
               <div>

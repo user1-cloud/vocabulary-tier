@@ -594,7 +594,7 @@
               {/if}
             </div>
             <CardDescription>
-              悬停任意词，右侧「词条详情」面板显示它的频次、排名、占比与分域排名；点击词条可钉住详情。
+              悬停任意词，右侧「词条详情」面板显示它的频次、排名、前 %、占比与分域排名；点击词条可钉住详情。
               <span class="ml-1">词表与字表的七组阈值都可以在「表管理」页自定义，这里按生效阈值着色。</span>
             </CardDescription>
           </CardHeader>
@@ -669,7 +669,7 @@
             {settings}
             curves={tierCurves}
             pinned={pinnedIndex !== null}
-            emptyHint="悬停左侧任意词条，这里会固定显示它的频次、排名、占比、分组与各分域排名。"
+            emptyHint="悬停左侧任意词条，这里会固定显示它的频次、排名、前 %、占比、分组与各分域排名。"
           />
         </div>
 

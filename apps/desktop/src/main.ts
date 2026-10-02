@@ -2,6 +2,8 @@ import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
 import PopupApp from './PopupApp.svelte';
+import { initTheme } from './lib/theme.svelte';
+import { setupThemeSync } from './lib/theme-sync';
 
 /**
  * 入口：按窗口 label 分流。
@@ -62,6 +64,19 @@ if (label === 'popup') {
   document.documentElement.dataset.window = 'popup';
   document.body.classList.add('popup-window');
 }
+
+/**
+ * 两个窗口都要初始化主题。
+ *
+ * 之前只有主窗口的 App.svelte 调 `initTheme()`：
+ *   - 小窗从没把当前主题打到 <html> 上（index.html 的首屏脚本只认 localStorage
+ *     里的 'dark'，选「跟随系统」时不做任何处理，小窗因此会停在浅色）；
+ *   - 主窗口切换主题后，小窗也不会跟着变。
+ * 现在统一在这里初始化，并挂上跨窗口同步（StorageEvent + Tauri 事件总线两条路，
+ * 见 $lib/theme-sync.ts）。
+ */
+initTheme();
+setupThemeSync();
 
 const app = mount(label === 'popup' ? PopupApp : App, { target });
 

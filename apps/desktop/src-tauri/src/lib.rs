@@ -176,8 +176,8 @@ impl Default for Settings {
             corpus_dir: None,
             data_dir: None,
             hotkey: "Alt+Q".into(),
-            popup_width: 460.0,
-            popup_height: 340.0,
+            popup_width: 480.0,
+            popup_height: 420.0,
             popup_opacity: 1.0,
             popup_always_on_top: true,
             popup_auto_close_ms: 0,
@@ -1677,10 +1677,15 @@ mod tests {
         assert_eq!(back.popup_width, s.popup_width);
         assert_eq!(back.min_count, s.min_count);
 
-        // 老版本设置文件里没有的字段要能补默认值，否则升级后直接读不出设置
+        // 老版本设置文件里没有的字段要能补默认值，否则升级后直接读不出设置。
+        // 这里断言的是**默认值本身**（不是「等于某个历史值」），所以改了
+        // popup_width/height 的默认值就必须同步改这里——上一次改 460→480 时漏了，
+        // 结果是测试红着没人发现。直接跟 Settings::default() 比，免得再漏。
         let partial: Settings = serde_json::from_str(r#"{"hotkey":"Ctrl+Shift+K"}"#).unwrap();
         assert_eq!(partial.hotkey, "Ctrl+Shift+K");
-        assert_eq!(partial.popup_width, 460.0);
+        let d = Settings::default();
+        assert_eq!(partial.popup_width, d.popup_width);
+        assert_eq!(partial.popup_height, d.popup_height);
         assert_eq!(partial.theme, "system");
     }
 

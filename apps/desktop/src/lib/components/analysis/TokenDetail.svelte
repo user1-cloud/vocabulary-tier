@@ -12,6 +12,14 @@
  * 千万不要用后端返回的 `token.tier_name` 去反推上界：那是 meta 默认阈值下的组名。
  *
  * 纯展示：不持有 state、不写 state，可以在任何位置复用。
+ *
+ * 布局约定（很重要，别改回去）：**无论选中词条、标点还是未收录，渲染的骨架完全一样**
+ * —— 同样的两行四格 + 同样的一行徽标。以前标点时只剩一行文字、选中词时突然多出两行，
+ * 容器高度跟着上下跳，小窗底部的固定区域看起来像在抖。现在所有字段常驻，
+ * 没有数据的显示「—」，高度只由 `compact` 与字号决定。
+ *
+ * 「还没悬停过任何词」时不要在这里补提示语：小窗底部只有 112px 高，
+ * 一段两行的提示会把四格数据顶出可视区（实测过）。小窗那边直接展示第一条词条。
  */
 import { cn } from '$lib/utils';
 import {
@@ -20,7 +28,14 @@ import {
   swatchStyle,
   tierRangeLabelOfBounds,
 } from '$lib/tier-colors';
-import { boundsInfo, formatInt, formatPct, tierIndexFromBounds } from '$lib/format';
+import {
+  boundsInfo,
+  findTable,
+  formatInt,
+  formatPct,
+  formatTopPercent,
+  tierIndexFromBounds,
+} from '$lib/format';
 import { defaultSettings } from '$lib/api/bridge';
 import { tableLabel } from '$lib/segments';
 import { isDark } from '$lib/use-dark.svelte';
@@ -74,6 +89,9 @@ const boundsState = $derived(
 const bounds = $derived(boundsState?.bounds ?? []);
 const boundsWarning = $derived(boundsState?.warning ?? '');
 
+/** 全库表（`full/word` / `full/char`）——「前 %」与「占比」的分母都来自它 */
+const fullTable = $derived(meta ? findTable(meta.tables, kind) : undefined);
+
 /** 生效组号 0..6；未收录 / 没有 rank 时为 null */
 const tierIndex = $derived(token === null ? null : tierIndexFromBounds(token.rank, bounds));
 
@@ -98,13 +116,43 @@ const notCollected = $derived(token !== null && token.rank === null && token.tie
 
 /** 分域排名里至少有一个排名（否则这块完全没信息量） */
 const hasDomainRanks = $derived(token !== null && token.domain_ranks.length > 0);
+
+/**
+ * 「前 X%」—— 语料库里排名不低于它的词条占比。
+ *
+ *   前% = rank / 表内词条数 × 100
+ *
+ * 例：词表 20 万条、rank = 200 → 前 0.1%，含义是「比 99.9% 的词条更靠前」。
+ * 词条总数取**全库表**（`full/word` / `full/char`）的 entries，与后端算 rank 的
+ * 那张表一致；`pct`（占比）看的是 token 总量，两者不是一回事。
+ *
+ * ⚠️ 这里算的是「排名位置」，不是「按频次排序后有多少词条频次 ≤ 它」。
+ *    Zipf 分布下同一个名次区间里的频次差异很大，两者在头部会差一截；
+ *    要精确版本得让 Rust 侧在 VFR 里补一份累计词条数，属于后端改动。
+ */
+const entryCount = $derived(fullTable?.entries ?? 0);
+
+const topPercent = $derived.by(() => {
+  const rank = token?.rank ?? null;
+  if (rank === null || entryCount <= 0) return null;
+  return (rank / entryCount) * 100;
+});
+
+/** 占全部 token 的百分比：把算法写进 title，省得用户猜「占比」是什么意思 */
+const pctTitle = $derived.by(() => {
+  if (token === null || token.pct === null) return '该词条在全库表里没有记录，因此没有占比。';
+  const total = fullTable?.total_tokens ?? 0;
+  const which = isChar ? '全库字表' : '全库词表';
+  if (total <= 0) return `占比 = 该词条出现次数 ÷ ${which}的总 token 数`;
+  return `占比 = 该词条出现次数 ${formatInt(token.count)} ÷ ${which}总 token 数 ${formatInt(total)}`;
+});
 </script>
 
 {#if token === null}
   <p class={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>{emptyHint}</p>
 {:else}
   <div class={cn('min-w-0 break-words', compact ? 'text-[11px]' : 'text-xs', className)}>
-    <!-- 词头 + 分组 -->
+    <!-- 词头 + 分组。这一行常驻，所以选中标点还是长词，详情区高度都不变 -->
     <div class="flex items-start justify-between gap-2">
       <span
         class={cn('min-w-0 flex-1 truncate font-semibold', compact ? 'text-xs' : 'text-sm')}
@@ -122,56 +170,38 @@ const hasDomainRanks = $derived(token !== null && token.domain_ranks.length > 0)
       </span>
     </div>
 
-    {#if !token.accepted}
-      <p class="mt-2 text-muted-foreground" data-testid="token-detail-skipped">
-        标点 / 空白，不参与统计。
-      </p>
-    {:else}
-      <dl class={cn('mt-2 grid grid-cols-2 gap-x-3', compact ? 'gap-y-1' : 'gap-y-1.5')}>
-        <div class="flex items-baseline justify-between gap-2">
-          <dt class="text-muted-foreground">频次</dt>
-          <dd class="font-medium tabular-nums">{formatInt(token.count)}</dd>
-        </div>
-        <div class="flex items-baseline justify-between gap-2">
-          <dt class="text-muted-foreground">排名</dt>
-          <dd class="font-medium tabular-nums">
-            {token.rank === null ? '未收录' : `#${formatInt(token.rank)}`}
-          </dd>
-        </div>
-        <div class="flex items-baseline justify-between gap-2">
-          <dt class="text-muted-foreground">占比</dt>
-          <dd class="font-medium tabular-nums">{formatPct(token.pct)}</dd>
-        </div>
-        <div class="flex items-baseline justify-between gap-2">
-          <dt class="text-muted-foreground">查表</dt>
-          <dd class="font-medium">
-            {tableLabel(token.table)}{token.single_cjk ? '（单字）' : ''}
-          </dd>
-        </div>
-      </dl>
+    <!-- 四格数据：标点 / 未收录也照样渲染，只是值是「—」。
+         布局因此恒定，容器高度不会随选中的 token 种类变化。 -->
+    <dl class={cn('mt-2 grid grid-cols-2 gap-x-3', compact ? 'gap-y-1' : 'gap-y-1.5')}>
+      <div class="flex items-baseline justify-between gap-2">
+        <dt class="text-muted-foreground">频次</dt>
+        <dd class="font-medium tabular-nums">{token.accepted ? formatInt(token.count) : '—'}</dd>
+      </div>
+      <div class="flex items-baseline justify-between gap-2">
+        <dt class="text-muted-foreground">排名</dt>
+        <dd class="font-medium tabular-nums">
+          {!token.accepted ? '—' : token.rank === null ? '未收录' : `#${formatInt(token.rank)}`}
+        </dd>
+      </div>
+      <div class="flex items-baseline justify-between gap-2">
+        <dt class="text-muted-foreground">前</dt>
+        <dd class="font-medium tabular-nums" title="排名 ÷ 该表词条总数">
+          {token.accepted ? formatTopPercent(topPercent) : '—'}
+        </dd>
+      </div>
+      <div class="flex items-baseline justify-between gap-2">
+        <dt class="text-muted-foreground">占比</dt>
+        <dd class="font-medium tabular-nums" title={pctTitle}>
+          {token.accepted ? formatPct(token.pct) : '—'}
+        </dd>
+      </div>
+    </dl>
 
-      {#if notCollected}
-        <p
-          class="mt-2 rounded-md border border-dashed border-border px-2 py-1 text-muted-foreground"
-          data-testid="token-detail-unknown"
-        >
-          语料库未收录：词表 / 字表里都没有这个词条，因此没有频次、排名与分组
-          （与「极少」不同，那一组是有排名的真实分组）。
-        </p>
-      {/if}
-
-      {#if rangeLabel}
-        <p class="mt-1.5 text-[11px] text-muted-foreground" data-testid="token-detail-range">
-          {groupLabel} · 该组实际生效的排名上界：{rangeLabel}
-        </p>
-      {/if}
-      {#if boundsWarning}
-        <p class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-          生效阈值有回退：{boundsWarning}
-        </p>
-      {/if}
-
-      <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
+    <div class="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
+      <span class="rounded border border-border px-1.5 py-0.5 text-[11px] whitespace-nowrap text-muted-foreground">
+        {tableLabel(token.table)}
+      </span>
+      {#if token.accepted}
         <span
           class={cn(
             'rounded border px-1.5 py-0.5 text-[11px] whitespace-nowrap',
@@ -196,7 +226,32 @@ const hasDomainRanks = $derived(token !== null && token.domain_ranks.length > 0)
             已钉住
           </span>
         {/if}
-      </div>
+      {:else}
+        <span class="text-muted-foreground" data-testid="token-detail-skipped">标点 / 空白，不参与统计</span>
+      {/if}
+    </div>
+
+    {#if token.accepted}
+      {#if notCollected}
+        <p
+          class="mt-2 rounded-md border border-dashed border-border px-2 py-1 text-muted-foreground"
+          data-testid="token-detail-unknown"
+        >
+          语料库未收录：词表 / 字表里都没有这个词条，因此没有频次、排名与分组
+          （与「极少」不同，那一组是有排名的真实分组）。
+        </p>
+      {/if}
+
+      {#if rangeLabel}
+        <p class="mt-1.5 text-[11px] text-muted-foreground" data-testid="token-detail-range">
+          {groupLabel} · 生效排名上界 {rangeLabel}
+        </p>
+      {/if}
+      {#if boundsWarning}
+        <p class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+          生效阈值有回退：{boundsWarning}
+        </p>
+      {/if}
 
       {#if hasDomainRanks}
         <div class="mt-2 border-t border-border pt-2">
