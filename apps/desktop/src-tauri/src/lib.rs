@@ -226,6 +226,9 @@ struct AppState {
     /// 不还的话焦点可能落到本应用主窗口上，于是用户下次划词时 `Ctrl+C`
     /// 会被发到我们自己这里，复制不到选中内容 —— 症状就是「小窗是空的」。
     prev_foreground: Mutex<isize>,
+    /// 最近一次取词为什么没取到（给用户看的短句，取到内容时为空）。
+    /// 直接显示在小窗里，省得用户去翻日志。
+    capture_note: Mutex<String>,
 }
 
 impl AppState {
@@ -730,15 +733,18 @@ fn set_settings(
 
 #[tauri::command]
 async fn capture_selection(state: State<'_, AppState>) -> Result<String, String> {
-    let text = tauri::async_runtime::spawn_blocking(|| capture::capture_selection(420))
+    let cap = tauri::async_runtime::spawn_blocking(|| capture::capture_selection(420))
         .await
         .map_err(|e| format!("取词任务失败：{e}"))??;
-    if !text.is_empty() {
+    if !cap.text.is_empty() {
         if let Ok(mut g) = state.pending.lock() {
-            *g = text.clone();
+            *g = cap.text.clone();
         }
     }
-    Ok(text)
+    if let Ok(mut g) = state.capture_note.lock() {
+        *g = cap.reason.clone();
+    }
+    Ok(cap.text)
 }
 
 #[tauri::command]
@@ -871,7 +877,26 @@ fn show_popup(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
         &format!("[小窗] 推送待分析文本 {} 字符", text.chars().count()),
     );
     let _ = app.emit_to(POPUP_LABEL, "popup:text", text);
+
+    // 同时把「这次为什么没取到」推给小窗，让界面直接把原因显示出来。
+    let note = app
+        .state::<AppState>()
+        .capture_note
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let _ = app.emit_to(POPUP_LABEL, "popup:note", note);
     Ok(())
+}
+
+/// 最近一次取词失败的原因（小窗挂载时取用）。
+#[tauri::command]
+fn capture_note(state: State<'_, AppState>) -> String {
+    state
+        .capture_note
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
 }
 
 /// 隐藏小窗，并把焦点**还给用户原来在用的窗口**。
@@ -915,10 +940,21 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         // 取词会阻塞几百毫秒（等目标程序写剪贴板），绝不能占着热键回调线程
         let h = handle.clone();
         std::thread::spawn(move || {
-            let text = capture::capture_selection(420).unwrap_or_default();
+            let (text, reason) = match capture::capture_selection(420) {
+                Ok(c) => (c.text, c.reason),
+                Err(e) => (String::new(), format!("取词失败：{e}")),
+            };
             log_line(
                 "startup.log",
-                &format!("[热键] 取词得到 {} 字符", text.chars().count()),
+                &format!(
+                    "[热键] 取词得到 {} 字符{}",
+                    text.chars().count(),
+                    if reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!("；原因：{reason}")
+                    }
+                ),
             );
             {
                 let st = h.state::<AppState>();
@@ -936,6 +972,12 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
                     } else {
                         *g = text;
                     }
+                }
+                // 同样先绑定再 match：直接 `if let Ok(g) = st.capture_note.lock()`
+                // 会让临时 Result 活到块尾，而 st 更早 drop（E0597）
+                let note_locked = st.capture_note.lock();
+                if let Ok(mut g) = note_locked {
+                    *g = reason;
                 }
             }
             let settings = h.state::<AppState>().settings_snapshot();
@@ -1023,20 +1065,56 @@ fn log_frontend_error(message: String) {
     log_line("crash.log", &format!("前端错误 {message}"));
 }
 
+/// 日志目录 —— **逐个候选实际试写，用第一个真正可写的**。
 ///
-/// 优先级：`VOCTIER_LOG_DIR` 环境变量 → `%APPDATA%\com.voctier.desktop` → 系统临时目录。
-/// 环境变量那条是给「APPDATA 不可写」的环境（受限用户配置、便携安装）留的后路，
-/// 也方便把日志直接落到安装目录里。
+/// 为什么不能只做「取 APPDATA，取不到就退临时目录」：APPDATA 存在、目录也在，
+/// 并不代表**本进程**写得了（受限用户配置、企业管控、沙箱都会拦）。这个坑已经踩过：
+/// 目录存在、settings.json 也在，但应用写不进去，于是 startup.log 从来不出现，
+/// 排查时完全抓瞎。
+///
+/// 候选顺序：
+/// 1. `VOCTIER_LOG_DIR` 环境变量（用户显式指定，最高优先）；
+/// 2. `%APPDATA%\com.voctier.desktop`（常规位置）；
+/// 3. **程序所在目录 `\voctier-logs`** —— 绿色版与受限环境一般都能写；
+/// 4. 系统临时目录。
+///
+/// 结果缓存一次，避免每次写日志都探测。
 fn log_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("VOCTIER_LOG_DIR") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    match std::env::var("APPDATA") {
-        Ok(a) if !a.is_empty() => PathBuf::from(a).join("com.voctier.desktop"),
-        _ => std::env::temp_dir().join("com.voctier.desktop"),
-    }
+    static RESOLVED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            if let Ok(p) = std::env::var("VOCTIER_LOG_DIR") {
+                if !p.trim().is_empty() {
+                    candidates.push(PathBuf::from(p));
+                }
+            }
+            if let Ok(a) = std::env::var("APPDATA") {
+                if !a.is_empty() {
+                    candidates.push(PathBuf::from(a).join("com.voctier.desktop"));
+                }
+            }
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("voctier-logs"));
+                }
+            }
+            candidates.push(std::env::temp_dir().join("com.voctier.desktop"));
+
+            for dir in &candidates {
+                if std::fs::create_dir_all(dir).is_err() {
+                    continue;
+                }
+                // 必须真写一个探针文件确认——create_dir_all 成功不代表写得进去
+                let probe = dir.join(".write-probe");
+                if std::fs::write(&probe, b"ok").is_ok() {
+                    let _ = std::fs::remove_file(&probe);
+                    return dir.clone();
+                }
+            }
+            std::env::temp_dir()
+        })
+        .clone()
 }
 
 /// 记录构建模式与实际会加载的地址。
@@ -1219,6 +1297,7 @@ pub fn run() {
             take_pending_selection,
             open_popup,
             hide_popup,
+            capture_note,
             log_frontend_error,
         ])
         .setup(|app| {

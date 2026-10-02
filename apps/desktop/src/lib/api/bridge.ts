@@ -50,6 +50,8 @@ export const SCAN_ERROR_EVENT = 'scan:error';
  * 空串 = 当前没有选中内容，小窗应显示空输入框等用户手输。
  */
 export const POPUP_TEXT_EVENT = 'popup:text';
+/** 取词失败原因，与 `POPUP_TEXT_EVENT` 同时推送（见 `onPopupNote`） */
+export const POPUP_NOTE_EVENT = 'popup:note';
 
 /**
  * 悬浮小窗 → 主窗口 的文本回传事件（小窗里的「发回主窗口」按钮）。
@@ -433,6 +435,33 @@ export async function onPopupText(cb: (text: string) => void): Promise<UnlistenF
 }
 
 /**
+ * 取词失败原因（`popup:note`）。
+ *
+ * 取词失败的原因全在环境里（焦点被抢、权限级别不一致、剪贴板被占用、
+ * 目标程序不响应 Ctrl+C），而日志文件用户未必找得到。后端在每次显示小窗后
+ * 会把「这次为什么没取到」一并推过来，界面直接显示出来，用户当场就知道
+ * 该换目标程序、该以管理员身份运行、还是干脆手输。
+ *
+ * 取到内容时 payload 是空串。
+ */
+export async function onPopupNote(cb: (note: string) => void): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<string>(POPUP_NOTE_EVENT, (event) =>
+    cb(typeof event.payload === 'string' ? event.payload : '')
+  );
+}
+
+/**
+ * 小窗挂载时主动拉一次取词失败原因（与 `onPopupNote` 的关系同 `takePendingSelection`：
+ * 首次显示时事件可能早于监听注册）。
+ */
+export async function fetchCaptureNote(): Promise<string> {
+  if (!isTauri()) return MOCK.captureNote();
+  const res = await call<string>('capture_note');
+  return res.ok ? res.data : '';
+}
+
+/**
  * 小窗 → 主窗口的文本回传（见 `POPUP_REPLY_EVENT`）。
  */
 export async function emitPopupReply(text: string): Promise<Result<null>> {
@@ -806,6 +835,16 @@ const MOCK_DIR = '(浏览器预览) 演示数据集';
 /** 用小窗 / 划句页共用的「首次取词」模拟 */
 let mockPendingTaken = false;
 
+/**
+ * 浏览器预览开关：`?capture=failed` 让 mock 直接呈现「取词失败」那一屏。
+ *
+ * 这一屏是小窗里最容易出布局问题的（长中文说明 + 460px 窄窗），
+ * 之前就是因为只能在真实 Tauri 里才看得到，横向溢出一直没被发现。
+ */
+const MOCK_CAPTURE_FAILED =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).get('capture') === 'failed';
+
 type ProgressHandler = (payload: ScanProgress) => void;
 type DoneHandler = (meta: Meta) => void;
 type ErrorHandler = (message: string) => void;
@@ -1169,9 +1208,23 @@ const MOCK = {
 
   /** 首次调用返回一段示例文本，之后返回空串（模拟「取走待分析文本」） */
   takePendingSelection(): string {
+    if (MOCK_CAPTURE_FAILED) return ''; // 预览「取词失败」那一屏
     if (mockPendingTaken) return '';
     mockPendingTaken = true;
     return '语言统计可以帮助我们理解文本的词汇分布，覆盖率与排名说明了用词难度。';
+  },
+
+  /**
+   * 取词失败原因的示例。
+   *
+   * 浏览器预览里没有真实取词，但**必须**能预览到这个错误态：它是小窗最容易出
+   * 布局问题的一屏（长中文串 + 窄窗口），不能只在真实 Tauri 里才看得到。
+   * 用 `?window=popup&capture=failed` 打开即可看到（见 MOCK_CAPTURE_FAILED）。
+   */
+  captureNote(): string {
+    return MOCK_CAPTURE_FAILED
+      ? '没有取到选中内容：Ctrl+C 没有被目标程序响应。常见原因是两者权限级别不一致，或目标程序不支持复制。可以点下面的输入框直接手输要查的词。'
+      : '';
   },
 };
 

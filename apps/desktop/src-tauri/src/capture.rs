@@ -18,11 +18,23 @@ fn note(msg: impl AsRef<str>) {
     crate::log_line("startup.log", &format!("[取词] {}", msg.as_ref()));
 }
 
-/// 取当前前台窗口的选中文本。返回空串表示「当前没有选中内容」。
+/// 取词结果。
+pub struct Capture {
+    /// 抓到的文本；空串表示当前没有选中内容。
+    pub text: String,
+    /// 取不到时给**用户看**的简短原因（取到内容时为空串）。
+    ///
+    /// 为什么要有这个：取词失败的原因全在环境里（焦点、UIPI、剪贴板占用、
+    /// 目标程序不响应），而日志文件用户未必找得到。把原因直接显示在小窗里，
+    /// 既省掉一轮「发日志给我」的往返，也让用户自己知道该怎么办。
+    pub reason: String,
+}
+
+/// 取当前前台窗口的选中文本。
 ///
 /// `timeout_ms` 是等待目标程序写入剪贴板的上限。太小会在慢程序里丢词，
 /// 太大则在「没有选中内容」时会明显卡顿。
-pub fn capture_selection(timeout_ms: u64) -> Result<String, String> {
+pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
     let before = platform::clipboard_seq();
 
     // 1) 先把原内容读出来保存。
@@ -110,6 +122,7 @@ pub fn capture_selection(timeout_ms: u64) -> Result<String, String> {
         }
     }
     let waited = t0.elapsed().as_millis();
+    let mut reason = String::new();
     if !changed {
         // 【临时诊断】如果设了 VOCTIER_DEBUG_INJECT，就额外注入一个普通字符键 'X'。
         // 目的：把「注入完全没效果」和「注入有效但 Ctrl+C 组合不对」这两类原因分开。
@@ -125,6 +138,12 @@ pub fn capture_selection(timeout_ms: u64) -> Result<String, String> {
              请对照上面「注入前」那两行：若前台不是目标程序，是焦点被抢；\
              若修饰键显示 Alt=按下，则是 Ctrl+C 被解释成了 Ctrl+Alt+C。"
         ));
+        // 给用户看的说法要**短**：小窗只有 460px 宽，塞进长窗口标题会横向溢出。
+        // 详细的「发给谁、修饰键状态」留在日志里，这里只说清原因和下一步怎么办。
+        reason = "没有取到选中内容：Ctrl+C 没有被目标程序响应。\
+                  常见原因是两者权限级别不一致，或目标程序不支持复制。\
+                  可以点下面的输入框直接手输要查的词。"
+            .to_string();
     }
 
     // 4) 读走内容。有程序是「先改序列号再填数据」，所以要重试几次。
@@ -170,7 +189,10 @@ pub fn capture_selection(timeout_ms: u64) -> Result<String, String> {
         }
     }
 
-    Ok(captured)
+    Ok(Capture {
+        text: captured,
+        reason,
+    })
 }
 
 #[cfg(windows)]

@@ -26,8 +26,10 @@
     copyText,
     datasetStatus,
     emitPopupReply,
+    fetchCaptureNote,
     getSettings,
     isTauri,
+    onPopupNote,
     onPopupText,
     openDataset,
     takePendingSelection,
@@ -53,6 +55,8 @@
   let loading = $state(true);
   let error = $state('');
   let notice = $state('');
+  /** 最近一次取词为什么没取到（空串 = 取到了，或还没取过） */
+  let captureNote = $state('');
 
   /**
    * 详情区里显示的 token —— 用**下标**记住，而不是 token 对象：
@@ -116,17 +120,21 @@
     return schedule(value, ready);
   });
 
-  // 订阅后端的 `popup:text` 推送；组件卸载时 unlisten
+  // 订阅后端的 `popup:text` 与 `popup:note` 推送；组件卸载时 unlisten
   $effect(() => {
     let disposed = false;
-    let unlisten: (() => void) | null = null;
-    void onPopupText((next) => applyPopupText(next)).then((off) => {
-      if (disposed) off();
-      else unlisten = off;
-    });
+    const unlistens: Array<() => void> = [];
+    const track = (p: Promise<() => void>) => {
+      void p.then((off) => {
+        if (disposed) off();
+        else unlistens.push(off);
+      });
+    };
+    track(onPopupText((next) => applyPopupText(next)));
+    track(onPopupNote((next) => (captureNote = next)));
     return () => {
       disposed = true;
-      unlisten?.();
+      for (const off of unlistens) off();
     };
   });
 
@@ -165,6 +173,8 @@
     if (pending.ok && pending.data.trim() && !userEdited && text === '') {
       text = pending.data;
     }
+    // 取词失败原因也拉一次（事件可能早于监听注册）
+    if (!captureNote) captureNote = await fetchCaptureNote();
 
     loading = false;
   }
@@ -401,9 +411,20 @@
         <p class="mt-1">请先在主窗口的「生成词频表」页完成一次统计。</p>
       </div>
     {:else if !text.trim()}
-      <p class="py-6 text-center text-[11px] text-muted-foreground">
-        输入或粘贴文字后，这里会实时显示每个词的分组着色。
-      </p>
+      {#if captureNote}
+        <!-- 取词失败的真原因：直接显示，省得用户去翻日志文件。
+             break-words 是必需的：原因文案里可能出现长串不可断的字符。 -->
+        <div
+          class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed break-words text-amber-700 dark:text-amber-300"
+          data-testid="capture-note"
+        >
+          {captureNote}
+        </div>
+      {:else}
+        <p class="py-6 text-center text-[11px] text-muted-foreground">
+          输入或粘贴文字后，这里会实时显示每个词的分组着色。
+        </p>
+      {/if}
     {:else}
       {#if error}
         <p class="mb-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-[11px] text-destructive">
