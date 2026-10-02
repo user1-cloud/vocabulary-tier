@@ -102,7 +102,10 @@ impl<'de> Deserialize<'de> for KeySet {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("一个 JSON 对象")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<KeySet, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<KeySet, A::Error> {
                 let mut keys = Vec::new();
                 while let Some(k) = map.next_key::<KeyStr<'de>>()? {
                     keys.push(k.0.into_owned());
@@ -232,11 +235,17 @@ impl<'de> Deserialize<'de> for OptStr<'de> {
             fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
                 Ok(OptStr(None))
             }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
                 while a.next_element::<IgnoredAny>()?.is_some() {}
                 Ok(OptStr(None))
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
                 while a.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
                 Ok(OptStr(None))
             }
@@ -264,7 +273,10 @@ impl<'de, 'r> DeserializeSeed<'de> for TextArraySeed<'r> {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("一个对象数组")
             }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
                 let mut out = Vec::new();
                 while let Some(item) = seq.next_element_seed(TextArrayItemSeed {
                     text_key: self.text_key,
@@ -279,7 +291,10 @@ impl<'de, 'r> DeserializeSeed<'de> for TextArraySeed<'r> {
                 Ok(out)
             }
         }
-        d.deserialize_seq(V { text_key: self.text_key, alt: self.alt })
+        d.deserialize_seq(V {
+            text_key: self.text_key,
+            alt: self.alt,
+        })
     }
 }
 
@@ -301,7 +316,10 @@ impl<'de, 'r> DeserializeSeed<'de> for TextArrayItemSeed<'r> {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("一个含文本字段的对象")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
                 let mut primary: Option<Cow<'de, str>> = None;
                 let mut fallback: Option<Cow<'de, str>> = None;
                 while let Some(k) = map.next_key::<KeyStr<'de>>()? {
@@ -330,7 +348,10 @@ impl<'de, 'r> DeserializeSeed<'de> for TextArrayItemSeed<'r> {
                 Ok(None)
             }
         }
-        d.deserialize_any(V { text_key: self.text_key, alt: self.alt })
+        d.deserialize_any(V {
+            text_key: self.text_key,
+            alt: self.alt,
+        })
     }
 }
 
@@ -351,7 +372,10 @@ impl<'de, 'r> DeserializeSeed<'de> for RowSeed<'r> {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str("一个对象")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
                 let rule = self.rule;
                 let mut out: Vec<Cow<'de, str>> = Vec::new();
                 // plain 规则的候选，按优先级排序后取第一个非空
@@ -416,7 +440,9 @@ pub fn extract_row<'de>(rule: &SourceRule, raw: &'de [u8]) -> Result<Option<Vec<
     let mut de = serde_json::Deserializer::from_str(&lossy);
     match (RowSeed { rule }).deserialize(&mut de) {
         Ok(v) => Ok(Some(
-            v.into_iter().map(|c| Cow::Owned(c.into_owned())).collect::<Vec<_>>(),
+            v.into_iter()
+                .map(|c| Cow::Owned(c.into_owned()))
+                .collect::<Vec<_>>(),
         )),
         Err(_) => Ok(None),
     }
@@ -470,7 +496,10 @@ mod tests {
     #[test]
     fn extract_subtitle_falls_back_to_cht() {
         let rules = builtin_rules();
-        let r = rules.iter().find(|r| r.name == "parallel_subtitle").unwrap();
+        let r = rules
+            .iter()
+            .find(|r| r.name == "parallel_subtitle")
+            .unwrap();
         let line = r#"{"zh_text":"","cht_text":"繁體"}"#.as_bytes();
         let got = extract_row(r, line).unwrap().unwrap();
         assert_eq!(got, vec!["繁體"]);

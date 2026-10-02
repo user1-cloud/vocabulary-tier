@@ -140,9 +140,7 @@ pub fn oov_candidates(
 ) -> Vec<(Box<str>, u64)> {
     let mut v: Vec<(Box<str>, u64)> = words
         .iter()
-        .filter(|(w, c)| {
-            **c >= min_count && w.chars().count() >= min_len && !in_dict(w.as_ref())
-        })
+        .filter(|(w, c)| **c >= min_count && w.chars().count() >= min_len && !in_dict(w.as_ref()))
         .map(|(w, c)| (w.clone(), *c))
         .collect();
     v.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));

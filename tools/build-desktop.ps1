@@ -18,13 +18,15 @@
   应用启动时会把构建模式写进 startup.log，可用 -Check 复核。
 
 .PARAMETER Bundle
-  同时生成安装包（NSIS / MSI）。不加则只出 exe，快得多。
+  同时生成安装包（**只出 NSIS**）。不加则只出 exe，快得多。
+  出安装包前必须先用 tools\prepare-seed.ps1 组装预置内容，否则本脚本会拒绝继续。
 
 .PARAMETER Check
   不构建，只打印当前 exe 的构建模式（读 startup.log 判断）。
 
 .EXAMPLE
   .\tools\build-desktop.ps1              # 只出 exe
+  .\tools\prepare-seed.ps1               # 出安装包前先组装预置词库/词表
   .\tools\build-desktop.ps1 -Bundle      # 连同安装包
   .\tools\build-desktop.ps1 -Check       # 检查现有 exe 是不是生产模式
 #>
@@ -96,6 +98,33 @@ $env:TEMP = $buildTmp
 
 Push-Location $desktop
 try {
+    # 出安装包前先把预置内容检查掉。
+    #
+    # 安装钩子（src-tauri\nsis\installer-hooks.nsh）用 NSIS 的 `File /r` 把预置词库与
+    # 预置词表直接写进用户数据目录（刻意不走 bundle.resources —— 那条路会落到
+    # Program Files，普通用户不可写，而预置内容必须能被用户删改）。
+    # 而 `File /r` 遇到**空目录**会让 makensis 直接构建失败，所以在这里拦一道，
+    # 给一句能照着做的提示，而不是让用户去读 makensis 的天书。
+    if ($Bundle) {
+        $seed = Join-Path $repo 'apps\desktop\src-tauri\seed'
+        foreach ($sub in 'dicts', 'tables') {
+            $d = Join-Path $seed $sub
+            $n = if (Test-Path $d) {
+                @(Get-ChildItem $d -Recurse -File -ErrorAction SilentlyContinue).Count
+            } else { 0 }
+            if ($n -eq 0) {
+                throw @"
+$d 是空的（或不存在），出安装包前必须先组装预置内容：
+
+    .\tools\prepare-seed.ps1
+
+如果 assets\seed\dicts\ 里还没有词库原件，再加 -RefreshDict。
+"@
+            }
+        }
+        Write-Host '    预置内容已就绪：seed\dicts + seed\tables'
+    }
+
     # 别用 cargo build：那会编成 dev 模式，运行白屏（见本脚本说明）
     if ($Bundle) {
         pnpm tauri build

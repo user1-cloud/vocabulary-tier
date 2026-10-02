@@ -28,6 +28,15 @@ node_modules/
 /tools/userdict_*.txt
 /tools/oov_candidates*.tsv
 
+# 功能预览截图（本地草稿，别入库）
+/shots/
+
+# 安装包要携带的预置内容：由 tools/prepare-seed.ps1 组装，别入库。
+#   词库原件随仓库带在 assets/seed/dicts/ 下（4.84 MB，MIT，为了让全新 clone
+#   也能构建出可用的安装包）；
+#   预置词表（约 92 MB）从 /data/ 摘出来，太大了不适合入库。
+/apps/desktop/src-tauri/seed/
+
 # ---- 本地 / 个人配置 --------------------------------------------------------
 # 应用设置实际存在 %APPDATA%\com.voctier.desktop\settings.json（在仓库之外，
 # 不会被提交）。下面兜住将来可能出现的仓库内本地覆盖配置。

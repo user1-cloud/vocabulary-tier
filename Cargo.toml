@@ -10,7 +10,16 @@ license = "MIT"
 repository = "https://github.com/local/VocTier"
 
 [workspace.dependencies]
-jieba-rs = "0.11"
+# ⚠ 必须关掉 default feature `default-dict`：它会把 jieba 的 dict.txt（4.84 MB）用
+# include-flate 以 zstd 压进**每个**链接了本库的二进制里，同时拖进 zstd-sys 这个
+# 带 C 代码的依赖（见 tools/build-desktop.ps1 里为它写的 TEMP 绕行）。
+#
+# 现在词库是数据文件夹里的一份普通文件（用户可增删替换），由 `vocfreq_core::dict`
+# 负责读取、校验与装载，命令行与桌面端走的是同一条路径。
+jieba-rs = { version = "0.11", default-features = false }
+# 词库内容指纹（写进 meta.json 的 `DictRef.sha256`），用来判断"这张表是基于哪份词库生成的"。
+# 不是安全用途，但要求跨版本稳定 —— 所以不能用 std 的 DefaultHasher（它不保证跨版本一致）。
+sha2 = "0.10"
 rayon = "1"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }

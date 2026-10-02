@@ -258,7 +258,8 @@ mod tests {
 
     #[test]
     fn drops_script_and_style_contents() {
-        let src = "<p>前</p><script>var x = '<b>坏</b>';</script><style>.a{color:red}</style><p>后</p>";
+        let src =
+            "<p>前</p><script>var x = '<b>坏</b>';</script><style>.a{color:red}</style><p>后</p>";
         let got = clean(src, true);
         assert!(got.contains('前') && got.contains('后'));
         assert!(!got.contains("var x"), "script 内容应被丢弃: {got}");
