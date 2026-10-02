@@ -65,6 +65,20 @@ fn control_type_name(id: i32) -> &'static str {
 /// * Chromium 系浏览器的无障碍树是**按需**启用的，第一次查询常常只能拿到顶层窗口
 ///   （`Class="Chrome_WidgetWin_1"`、`ControlType=窗口`）。这不是本程序的 bug，
 ///   换成 TextGO 等同类工具也一样。
+/// 把元素名截断，避免把一整段正文塞进小窗。
+///
+/// 实测踩过：在浏览器里选中一段文字时，焦点元素的 `Name` **就是那段被选中的文字**，
+/// 于是失败提示变成了「焦点在『我想要制作一个划句子自动拆分词汇…』这个面板上」——
+/// 一整段话，挤满小窗，反而看不出重点。
+fn short_name(name: &str) -> String {
+    let trimmed = name.trim();
+    let mut out: String = trimmed.chars().take(16).collect();
+    if trimmed.chars().count() > 16 {
+        out.push('…');
+    }
+    out
+}
+
 #[cfg(windows)]
 fn uia_selection() -> (Option<String>, String) {
     use windows::core::Interface;
@@ -72,7 +86,8 @@ fn uia_selection() -> (Option<String>, String) {
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+        UIA_TextPatternId,
     };
 
     unsafe {
@@ -97,57 +112,105 @@ fn uia_selection() -> (Option<String>, String) {
             }
         };
 
-        // 焦点元素到底是谁：Class / Name / ControlType 都记下来。
-        let name = element.CurrentName().map(|b| b.to_string()).unwrap_or_default();
-        let class = element
-            .CurrentClassName()
-            .map(|b| b.to_string())
-            .unwrap_or_default();
-        let ctype = element.CurrentControlType().map(|c| c.0).unwrap_or(-1);
-        let pid = element.CurrentProcessId().unwrap_or(-1);
-        let kind = control_type_name(ctype);
-        let who = format!("pid={pid} Class={class:?} Name={name:?} ControlType={ctype}({kind})");
+        // 从焦点元素开始，**向上逐级**找第一个支持 TextPattern 的元素。
+        //
+        // 为什么必须往上找：浏览器里被选中的文字挂在 **Document** 上，而
+        // `GetFocusedElement()` 往往只返回页面里的某个 **Pane**
+        // （实测其 Name 就是那段被选中的文字）。只问焦点元素必然一无所获——
+        // 这也是同类开源工具（TextGO）在浏览器里取不到的原因。
+        //
+        // 只走 ControlView（用户可见元素），最多 8 级，避免在深层树里空转。
+        let walker = automation.ControlViewWalker().ok();
+        let mut current: IUIAutomationElement = element.clone();
+        let mut text_pattern: Option<IUIAutomationTextPattern> = None;
+        let mut where_found = String::new();
+        let mut focus_note = String::new();
 
-        // 用 GetCurrentPattern + cast（与 TextGO 的写法一致）。
-        // 泛型的 GetCurrentPatternAs 失败时返回的 HRESULT 是 0x00000000，
-        // 看不出任何原因；这一步失败时至少能判断「取到模式但转换失败」。
-        let pattern: IUIAutomationTextPattern =
-            match element.GetCurrentPattern(UIA_TextPatternId).and_then(|p| p.cast()) {
-                Ok(p) => p,
-                Err(e) => {
-                    note(format!("UIA 焦点元素 {who}；该控件不支持 TextPattern（{e}）"));
-                    // 焦点在「窗口/面板」上是最常见也最容易误解的一种失败：
-                    // 用户以为选好了词，其实按热键时焦点根本不在任何文本框里。
-                    let msg = match ctype {
-                        50032 | 50033 => format!(
-                            "焦点在「{}」这个{}上，而不是某个文本框/页面里。\
-                             请先在目标程序里点一下输入区域、选中文字，再按热键。",
-                            if name.is_empty() { "目标程序" } else { &name },
-                            kind
-                        ),
-                        _ => format!(
-                            "焦点控件（{kind}，Class={class}）不支持直接读取选区。"
-                        ),
+        for depth in 0..8u32 {
+            let cname = current.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+            let cclass = current
+                .CurrentClassName()
+                .map(|b| b.to_string())
+                .unwrap_or_default();
+            let ctype = current.CurrentControlType().map(|c| c.0).unwrap_or(-1);
+            let kind = control_type_name(ctype);
+
+            match current
+                .GetCurrentPattern(UIA_TextPatternId)
+                .and_then(|p| p.cast::<IUIAutomationTextPattern>())
+            {
+                Ok(p) => {
+                    where_found = if depth == 0 {
+                        "焦点元素".to_string()
+                    } else {
+                        format!("焦点元素向上第 {depth} 级的 {kind}")
                     };
-                    return (None, msg);
+                    text_pattern = Some(p);
+                    break;
                 }
+                Err(e) => {
+                    note(format!(
+                        "UIA 第 {depth} 级 Class={cclass:?} ControlType={ctype}({kind}) 无 TextPattern（{e}）"
+                    ));
+                    // 只把**焦点自身**的情况做成给用户看的说明；祖先不支持是常态。
+                    if depth == 0 {
+                        let named = if cname.trim().is_empty() {
+                            "目标程序".to_string()
+                        } else {
+                            format!("「{}」", short_name(&cname))
+                        };
+                        focus_note = match ctype {
+                            // 窗口 / 面板：最常见、也最容易被误解的一种失败——
+                            // 用户以为选好了词，其实焦点根本不在任何文本框或页面文档上。
+                            50032 | 50033 => format!(
+                                "焦点在 {named} 这个{kind}上，而不是某个文本框或页面文档里。\
+                                 请先在目标程序里点一下输入区域、选中文字，再按热键。"
+                            ),
+                            _ => format!("焦点控件（{kind}，Class={cclass}）不支持直接读取选区。"),
+                        };
+                    }
+                }
+            }
+
+            let parent = match &walker {
+                Some(w) => w.GetParentElement(&current).ok(),
+                None => None,
             };
+            match parent {
+                Some(p) => current = p,
+                None => break,
+            }
+        }
+
+        let Some(pattern) = text_pattern else {
+            // 整条祖先链都没有 TextPattern
+            let msg = if focus_note.is_empty() {
+                "焦点所在的可访问性树里找不到可读的文本控件。".to_string()
+            } else {
+                focus_note
+            };
+            return (None, msg);
+        };
+
         let ranges = match pattern.GetSelection() {
             Ok(r) => r,
             Err(e) => {
-                note(format!("UIA 焦点元素 {who}；TextPattern 可用但取选区失败（{e}）"));
+                note(format!("UIA 在 {where_found} 取到 TextPattern，但取选区失败（{e}）"));
                 return (None, format!("取不到选区（{e}）"));
             }
         };
 
         let count = ranges.Length().unwrap_or(0);
-        note(format!("UIA 焦点元素 {who}；TextPattern 可用，选中 {count} 段"));
+        note(format!(
+            "UIA 在 {where_found} 取到 TextPattern，选中 {count} 段"
+        ));
         if count == 0 {
             return (
                 None,
-                format!("焦点控件（{kind}）支持读取，但当前选中 0 段——没有选中文字。"),
+                "可读的文本控件找到了，但当前选中 0 段——没有选中文字。".to_string(),
             );
         }
+
         let mut out = String::new();
         for i in 0..count {
             if let Ok(range) = ranges.GetElement(i) {
@@ -219,7 +282,11 @@ pub fn capture_selection(timeout_ms: u64) -> Result<Capture, String> {
                 ));
                 return Ok(Capture {
                     text: existing,
-                    reason: String::new(),
+                    // 必须说明来源：否则用户会以为这是自己刚选中的文字，
+                    // 而实际上是剪贴板里可能放了很久的旧内容。
+                    reason: "取词未成功，下面分析的是**剪贴板里已有的内容**。\
+                             要取选中的文字，请先自己按一次 Ctrl+C，再按热键。"
+                        .to_string(),
                 });
             }
         }

@@ -432,6 +432,17 @@
         </p>
       {/if}
 
+      <!-- 有内容也要显示来源说明：可能分析的是「剪贴板里已有的内容」而不是刚选中的文字，
+           不说清用户会以为取词成功了。 -->
+      {#if captureNote}
+        <p
+          class="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed break-words text-amber-700 dark:text-amber-300"
+          data-testid="capture-note"
+        >
+          {captureNote}
+        </p>
+      {/if}
+
       <TokenChips
         {tokens}
         compact
