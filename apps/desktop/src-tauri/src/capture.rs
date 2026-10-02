@@ -36,16 +36,25 @@ fn note(msg: impl AsRef<str>) {
 ///   这里失败就交给剪贴板法，不做重试——重试留给用户下一次按热键。
 #[cfg(windows)]
 fn uia_selection() -> Result<Option<String>, String> {
+    use windows::core::Interface;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
     };
 
     unsafe {
-        // 已初始化过会返回 S_FALSE 或 RPC_E_CHANGED_MODE，都无所谓
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // ⚠ 必须用 **MTA**（COINIT_MULTITHREADED），不能用 STA。
+        //
+        // 用 STA 时 `GetFocusedElement()` 能成功（能拿到元素的 Class/Name/pid），
+        // 但紧接着 `GetCurrentPatternAs(UIA_TextPatternId)` 会失败、且返回的 HRESULT
+        // 是 0x00000000 —— 看起来像「控件不支持 TextPattern」，其实是套间模型不对导致
+        // 跨进程取模式失败。实测同一个 WinForms 文本框，用 MTA 的 UIA 客户端
+        // （PowerShell 的 System.Windows.Automation）能正常拿到 TextPattern 与选区。
+        //
+        // 已初始化过会返回 S_FALSE 或 RPC_E_CHANGED_MODE，都无所谓。
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
@@ -54,16 +63,51 @@ fn uia_selection() -> Result<Option<String>, String> {
             .GetFocusedElement()
             .map_err(|e| format!("取焦点元素失败：{e}"))?;
 
-        let pattern: IUIAutomationTextPattern = match element.GetCurrentPatternAs(UIA_TextPatternId) {
-            Ok(p) => p,
-            Err(_) => return Ok(None), // 该控件不支持 TextPattern
+        // 把「焦点元素到底是谁」记下来。
+        //
+        // 这是排查取词失败最重要的一条信息：如果这里显示的不是用户以为的那个程序，
+        // 说明按热键的瞬间焦点已经在别处（窗口被抢焦点是最常见的原因），
+        // 那么「没取到内容」就是**正确行为**，而不是取词坏了。
+        let name = element.CurrentName().map(|b| b.to_string()).unwrap_or_default();
+        let class = element
+            .CurrentClassName()
+            .map(|b| b.to_string())
+            .unwrap_or_default();
+        let ctype = element.CurrentControlType().map(|c| c.0).unwrap_or(-1);
+        let pid = element.CurrentProcessId().unwrap_or(-1);
+        let who = format!("pid={pid} Class={class:?} Name={name:?} ControlType={ctype}");
+
+        // 用 GetCurrentPattern + cast，而不是泛型的 GetCurrentPatternAs。
+        //
+        // 原因：`GetCurrentPatternAs` 失败时返回的 HRESULT 是 0x00000000
+        // （「操作成功完成」却当成错误），完全看不出真实原因，而且实测同一个控件
+        // 用 PowerShell 的 UIA 客户端能拿到 TextPattern、这里却拿不到。
+        // 这一步拿到的是 IUnknown，失败原因能看清楚。
+        let pattern: IUIAutomationTextPattern = match element.GetCurrentPattern(UIA_TextPatternId) {
+            Ok(unknown) => match unknown.cast() {
+                Ok(p) => p,
+                Err(e) => {
+                    note(format!("UIA 焦点元素 {who}；取到模式但转换为 TextPattern 失败（{e}）"));
+                    return Ok(None);
+                }
+            },
+            Err(e) => {
+                note(format!("UIA 焦点元素 {who}；该控件不支持 TextPattern（{e}），改用剪贴板法"));
+                return Ok(None);
+            }
         };
         let ranges = match pattern.GetSelection() {
             Ok(r) => r,
-            Err(_) => return Ok(None),
+            Err(e) => {
+                note(format!("UIA 焦点元素 {who}；TextPattern 可用但取选区失败（{e}）"));
+                return Ok(None);
+            }
         };
 
         let count = ranges.Length().unwrap_or(0);
+        note(format!(
+            "UIA 焦点元素 {who}；TextPattern 可用，选中 {count} 段"
+        ));
         let mut out = String::new();
         for i in 0..count {
             if let Ok(range) = ranges.GetElement(i) {
@@ -221,13 +265,14 @@ fn capture_via_clipboard(timeout_ms: u64) -> Result<Capture, String> {
              请对照上面「注入前」那两行：若前台不是目标程序，是焦点被抢；\
              若修饰键显示 Alt=按下，则是 Ctrl+C 被解释成了 Ctrl+Alt+C。"
         ));
-        // 给用户看的说法要**短**：小窗只有 460px 宽，塞进长窗口标题会横向溢出。
-        // 详细的「发给谁、修饰键状态」留在日志里，这里只说清原因和下一步怎么办。
-        reason = "没有取到选中内容：程序已尝试「直接读取」与「模拟复制」两种方式，\
-                  都没拿到文本。请先确认确实选中了文字。\
-                  若目标程序是以管理员身份运行的，请也用管理员身份启动本程序——\
-                  权限级别不一致时 Windows 会拦掉取词（且不报错）。\
-                  也可以点下面的输入框直接手输要查的词。"
+        // 给用户看的说法要**短**（小窗只有 460px 宽），并把排查顺序按「最可能」排好。
+        // 详细的「发给谁、修饰键状态、UIA 焦点元素是谁」都留在日志里。
+        reason = "没有取到选中内容：直接读取与模拟复制两种方式都没拿到文本。\
+                  请先确认确实选中了文字；若目标程序以管理员身份运行，\
+                  请也用管理员身份启动本程序。两者权限一致仍失败时，\
+                  多半是安全软件（杀毒 / 电脑管家 / 输入法防护）拦截了本程序的\
+                  按键注入与无障碍读取，把它加入白名单再试。\
+                  也可以直接在下面手输要查的词。"
             .to_string();
     }
 
@@ -324,6 +369,17 @@ mod platform {
                 std::mem::size_of::<INPUT>() as i32,
             )
         };
+        // 首次调用时记一次「体检」：cbSize 不对时 SendInput 会直接失败，
+        // 而「事件被接受却毫无效果」这种只能靠 size 与 GetLastError 排除。
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            super::note(format!(
+                "SendInput 体检：size_of::<INPUT>()={}（应为 40），本批 {} 个事件，返回 {n}，GetLastError={err}",
+                std::mem::size_of::<INPUT>(),
+                inputs.len()
+            ));
+        }
         if n != inputs.len() as u32 {
             return Err(format!(
                 "SendInput 只发出 {n}/{} 个事件（可能被 UIPI 拦截：\
