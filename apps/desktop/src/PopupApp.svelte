@@ -28,6 +28,7 @@
     emitPopupReply,
     fetchCaptureNote,
     getSettings,
+    hidePopup,
     isTauri,
     onPopupNote,
     onPopupText,
@@ -118,6 +119,19 @@
     const value = text;
     const ready = hasTable;
     return schedule(value, ready);
+  });
+
+  // Esc 关闭小窗。热键流程的标配：看完一句随手关掉，焦点会由后端还给
+  // 你刚才划词的那个程序，方便接着选下一句。
+  $effect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        void hidePopup();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   });
 
   // 订阅后端的 `popup:text` 与 `popup:note` 推送；组件卸载时 unlisten

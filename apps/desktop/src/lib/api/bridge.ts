@@ -462,6 +462,17 @@ export async function fetchCaptureNote(): Promise<string> {
 }
 
 /**
+ * 隐藏悬浮小窗（后端会同时把焦点还给用户原来在用的窗口）。
+ *
+ * 热键流程里这个很重要：小窗看完要能一键关掉，且关掉后焦点回到你刚才划词的
+ * 那个程序，方便接着选下一句。
+ */
+export async function hidePopup(): Promise<void> {
+  if (!isTauri()) return;
+  await call<void>('hide_popup');
+}
+
+/**
  * 小窗 → 主窗口的文本回传（见 `POPUP_REPLY_EVENT`）。
  */
 export async function emitPopupReply(text: string): Promise<Result<null>> {

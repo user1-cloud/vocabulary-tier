@@ -209,6 +209,12 @@ struct AppState {
     tokenizer: RwLock<Option<Arc<Tokenizer>>>,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
     scanning: AtomicBool,
+    /// 是否正在取词。
+    ///
+    /// 热键连按时用来自我保护：一次取词要等目标程序写剪贴板（最长 1 秒），
+    /// 期间再按热键会起第二个线程、两个线程同时抢前台/抢剪贴板，结果互相干扰。
+    /// 后到的按键直接忽略即可——用户的意图本来也只是"取当前这一句"。
+    capturing: AtomicBool,
     /// 全局取词抓到、等着小窗取走的文本
     pending: Mutex<String>,
     settings: Mutex<Settings>,
@@ -868,21 +874,16 @@ fn show_popup(app: &tauri::AppHandle, s: &Settings) -> Result<(), String> {
 
     win.show().map_err(|e| format!("显示小窗失败：{e}"))?;
 
-    // ⚠ 有内容时**不要**抢焦点。
+    // 抢焦点。热键流程需要：
+    //   * Esc 关闭小窗；
+    //   * Ctrl+C 复制分析结果；
+    //   * 没取到内容时直接打字。
+    // 这些都要键盘焦点，所以这里必须 set_focus()。
     //
-    // 踩过的坑：小窗弹出时无条件 set_focus()，用户再按一次热键时前台就是小窗自己，
-    // 取词于是瞄向自己的 WebView2（日志里祖先链全是 BrowserView/BrowserRootView），
-    // 结果永远「没取到内容」，而且 Ctrl+C 会被发给我们自己。
-    //
-    // 现在只在「没取到内容、等用户手输」时才抢焦点——那时用户确实需要键盘焦点。
-    if text.trim().is_empty() {
-        let _ = win.set_focus();
-    } else {
-        log_line(
-            "startup.log",
-            "[小窗] 有内容，保持焦点在用户原来的窗口上（不抢焦点）",
-        );
-    }
+    // ⚠ 抢焦点会让「下一次按热键」时前台变成小窗自己。这一点由取词前的
+    // is_own_window + prev_foreground 归还逻辑兜住（见 run_capture 开头），
+    // 实测连按两次热键都能正确取到目标窗口的选区。
+    let _ = win.set_focus();
 
     // 把待分析文本**推**给小窗，而不是等它自己来取。
     //
@@ -957,6 +958,15 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
         // 取词会阻塞几百毫秒（等目标程序写剪贴板），绝不能占着热键回调线程
         let h = handle.clone();
         let run_capture = move || {
+            // 连按保护：上一次取词还没结束就忽略这次按键
+            {
+                let st = h.state::<AppState>();
+                if st.capturing.swap(true, Ordering::SeqCst) {
+                    log_line("startup.log", "[热键] 上一次取词还没结束，忽略这次按键");
+                    return;
+                }
+            }
+
             // ⚠ 先确认前台不是我们自己。
             //
             // 小窗弹出时会 set_focus()，之后用户再按热键，前台就是小窗本身；
@@ -991,6 +1001,11 @@ fn register_hotkey(app: &tauri::AppHandle, accelerator: &str) -> Result<(), Stri
                 Ok(c) => (c.text, c.reason),
                 Err(e) => (String::new(), format!("取词失败：{e}")),
             };
+            // 取词结束，放开连按保护（后面只是把结果交给小窗，不需要互斥）
+            {
+                let st = h.state::<AppState>();
+                st.capturing.store(false, Ordering::SeqCst);
+            }
             log_line(
                 "startup.log",
                 &format!(
