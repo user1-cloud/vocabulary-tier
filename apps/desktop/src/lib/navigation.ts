@@ -7,6 +7,16 @@ import IconBook from '$lib/components/icons/IconBook.svelte';
 import IconSettings from '$lib/components/icons/IconSettings.svelte';
 import type { MessageKey } from './messages';
 
+// 各页面的区块集合：由页面 module script 声明（PAGE_SECTIONS），这里只 import 组合。
+// 以后往某个页面加一个区块，只改那个页面（加一项 PAGE_SECTIONS + 一个 <SectionCard>），
+// 侧边栏第三级会自动出现，无需再来这里同步。
+import { PAGE_SECTIONS as SENTENCES_SECTIONS } from '../routes/SentencesPage.svelte';
+import { PAGE_SECTIONS as LEADERBOARD_SECTIONS } from '../routes/LeaderboardPage.svelte';
+import { PAGE_SECTIONS as DICTS_SECTIONS } from '../routes/DictsPage.svelte';
+import { PAGE_SECTIONS as WORDFREQ_SECTIONS } from '../routes/WordFreqPage.svelte';
+import { PAGE_SECTIONS as TABLES_SECTIONS } from '../routes/TablesPage.svelte';
+import { PAGE_SECTIONS as SETTINGS_SECTIONS } from '../routes/SettingsPage.svelte';
+
 /**
  * 全局路由表（骨架阶段用 $state 做「选中项」切换，不引入路由库）。
  *
@@ -79,11 +89,7 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.sentences.title',
         descriptionKey: 'nav.sentences.description',
         icon: IconSplit,
-        sections: [
-          { id: 'dataset', labelKey: 'sentences.dataset.title' },
-          { id: 'input', labelKey: 'sentences.input.title' },
-          { id: 'result', labelKey: 'sentences.result.title' },
-        ],
+        sections: Object.values(SENTENCES_SECTIONS),
       },
       {
         id: 'leaderboard',
@@ -91,10 +97,7 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.leaderboard.title',
         descriptionKey: 'nav.leaderboard.description',
         icon: IconTrophy,
-        sections: [
-          { id: 'control', labelKey: 'leaderboard.title' },
-          { id: 'ranklist', labelKey: 'leaderboard.rankListTitle' },
-        ],
+        sections: Object.values(LEADERBOARD_SECTIONS),
       },
     ],
   },
@@ -108,10 +111,7 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.dicts.title',
         descriptionKey: 'nav.dicts.description',
         icon: IconBook,
-        sections: [
-          { id: 'datadir', labelKey: 'dicts.dataDirTitle' },
-          { id: 'list', labelKey: 'dicts.listTitle' },
-        ],
+        sections: Object.values(DICTS_SECTIONS),
       },
       {
         id: 'wordfreq',
@@ -119,11 +119,7 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.wordfreq.title',
         descriptionKey: 'nav.wordfreq.description',
         icon: IconChart,
-        sections: [
-          { id: 'step1', labelKey: 'wordfreq.step1.title' },
-          { id: 'step2', labelKey: 'wordfreq.step2.title' },
-          { id: 'step3', labelKey: 'wordfreq.step3.title' },
-        ],
+        sections: Object.values(WORDFREQ_SECTIONS),
       },
       {
         id: 'tables',
@@ -131,12 +127,7 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.tables.title',
         descriptionKey: 'nav.tables.description',
         icon: IconTable,
-        sections: [
-          { id: 'library', labelKey: 'tables.library.title' },
-          { id: 'list', labelKey: 'tables.listTitle' },
-          { id: 'compose', labelKey: 'tables.compose.title' },
-          { id: 'tier', labelKey: 'tables.tierConfigTitle' },
-        ],
+        sections: Object.values(TABLES_SECTIONS),
       },
     ],
   },
@@ -150,15 +141,9 @@ export const NAV_GROUPS: NavGroup[] = [
         titleKey: 'nav.settings.title',
         descriptionKey: 'nav.settings.description',
         icon: IconSettings,
-        // 只放配置类区块；「保存」是操作、「关于」是静态信息，不进导航
-        sections: [
-          { id: 'hotkey', labelKey: 'settings.hotkey.title' },
-          { id: 'popup', labelKey: 'settings.popup.title' },
-          { id: 'appearance', labelKey: 'settings.appearance.title' },
-          { id: 'language', labelKey: 'settings.language.title' },
-          { id: 'tokenize', labelKey: 'settings.tokenize.title' },
-          { id: 'paths', labelKey: 'settings.paths.title' },
-        ],
+        // 只放配置类区块；「保存」是操作、「关于」是静态信息，不进导航。
+        // 区块集合来自 SettingsPage 的 PAGE_SECTIONS：新增区块只改页面一处。
+        sections: Object.values(SETTINGS_SECTIONS),
       },
     ],
   },

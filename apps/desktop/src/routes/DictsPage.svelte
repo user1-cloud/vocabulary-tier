@@ -1,3 +1,13 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    datadir: { id: 'datadir', labelKey: 'dicts.dataDirTitle' },
+    list: { id: 'list', labelKey: 'dicts.listTitle' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
    * 词典管理 —— 数据文件夹 `dicts\` 里的 `.dict` 清单。
@@ -18,13 +28,8 @@
    */
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
-  import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-  } from '$lib/components/ui/card';
+  import { Card, CardContent } from '$lib/components/ui/card';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import { Separator } from '$lib/components/ui/separator';
   import {
     dictDelete,
@@ -247,24 +252,23 @@
     </Card>
   {:else}
     <!-- ============================ 数据文件夹 ============================ -->
-    <Card data-testid="dicts-library-card" data-section="datadir">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('dicts.dataDirTitle')}</CardTitle>
-          {#if info?.is_default}
-            <Badge variant="outline">{t('dicts.defaultLocation')}</Badge>
-          {/if}
-          {#if hasUsable}
-            <Badge variant="success">{t('dicts.readyBadge')}</Badge>
-          {:else}
-            <Badge variant="outline" class="border-destructive/40 text-destructive">
-              {t('dicts.notReadyBadge')}
-            </Badge>
-          {/if}
-        </div>
-        <CardDescription>{t('dicts.dataDirDescription')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard
+      section={PAGE_SECTIONS.datadir}
+      descriptionKey="dicts.dataDirDescription"
+      data-testid="dicts-library-card"
+    >
+      {#snippet titleExtra()}
+        {#if info?.is_default}
+          <Badge variant="outline">{t('dicts.defaultLocation')}</Badge>
+        {/if}
+        {#if hasUsable}
+          <Badge variant="success">{t('dicts.readyBadge')}</Badge>
+        {:else}
+          <Badge variant="outline" class="border-destructive/40 text-destructive">
+            {t('dicts.notReadyBadge')}
+          </Badge>
+        {/if}
+      {/snippet}
         <div class="flex flex-wrap items-center gap-2">
           <code
             class="selectable min-w-64 flex-1 truncate rounded-md border border-border bg-surface-muted/50 px-3 py-1.5 font-mono text-xs"
@@ -302,8 +306,7 @@
         {#if ready !== hasUsable}
           <p class="text-[11px] text-muted-foreground">{t('dicts.readyMismatch')}</p>
         {/if}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     {#if loadError}
       <Card class="border-destructive/30">
@@ -314,18 +317,13 @@
     {/if}
 
     <!-- ============================ 词典清单 ============================ -->
-    <Card data-testid="dicts-list-card" data-section="list">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('dicts.listTitle')}</CardTitle>
-          <Badge variant="secondary">{t('dicts.countBadge', { count: formatInt(dicts.length) })}</Badge>
-          <Button variant="outline" size="sm" class="ml-auto" disabled={busy} onclick={() => void importDict()}>
-            {t('dicts.import')}
-          </Button>
-        </div>
-        <CardDescription>{t('dicts.listDescription')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard section={PAGE_SECTIONS.list} descriptionKey="dicts.listDescription" data-testid="dicts-list-card">
+      {#snippet titleExtra()}
+        <Badge variant="secondary">{t('dicts.countBadge', { count: formatInt(dicts.length) })}</Badge>
+        <Button variant="outline" size="sm" class="ml-auto" disabled={busy} onclick={() => void importDict()}>
+          {t('dicts.import')}
+        </Button>
+      {/snippet}
         {#if dicts.length === 0}
           <p class="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
             {t('dicts.empty')}
@@ -439,7 +437,6 @@
         <Separator />
 
         <p class="text-[11px] leading-relaxed text-muted-foreground">{t('dicts.noPermissionNote')}</p>
-      </CardContent>
-    </Card>
+  </SectionCard>
   {/if}
 </div>

@@ -4,6 +4,7 @@
   /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
   export const PAGE_SECTIONS = {
     library: { id: 'library', labelKey: 'tables.library.title' },
+    primary: { id: 'primary', labelKey: 'tables.primaryDomain.title' },
     list: { id: 'list', labelKey: 'tables.listTitle' },
     compose: { id: 'compose', labelKey: 'tables.compose.title' },
     tier: { id: 'tier', labelKey: 'tables.tierConfigTitle' },
@@ -1122,15 +1123,10 @@
       })}
 
       <!-- ==================== 主表组 ==================== -->
-      <Card data-testid="primary-scope-card">
-        <CardHeader>
-          <div class="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('tables.primaryDomain.title')}</CardTitle>
-            <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
-          </div>
-          <CardDescription>{t('tables.primaryDomain.description')}</CardDescription>
-        </CardHeader>
-        <CardContent class="flex flex-col gap-1.5">
+      <SectionCard section={PAGE_SECTIONS.primary} descriptionKey="tables.primaryDomain.description" data-testid="primary-scope-card">
+        {#snippet titleExtra()}
+          <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
+        {/snippet}
           {#each scopes as scope}
             {@const word = findTable(meta.tables, 'word', scope)}
             {@const char = findTable(meta.tables, 'char', scope)}
@@ -1159,8 +1155,7 @@
               </span>
             </label>
           {/each}
-        </CardContent>
-      </Card>
+  </SectionCard>
 
       <!-- ==================== A. 频率表（全部表组，平等） ==================== -->
       <SectionCard section={PAGE_SECTIONS.list} data-testid="table-list-card">

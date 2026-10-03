@@ -1,3 +1,17 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    hotkey: { id: 'hotkey', labelKey: 'settings.hotkey.title' },
+    popup: { id: 'popup', labelKey: 'settings.popup.title' },
+    appearance: { id: 'appearance', labelKey: 'settings.appearance.title' },
+    language: { id: 'language', labelKey: 'settings.language.title' },
+    tokenize: { id: 'tokenize', labelKey: 'settings.tokenize.title' },
+    paths: { id: 'paths', labelKey: 'settings.paths.title' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
    * 设置 —— 全局热键、悬浮小窗外观、主题、分词默认参数与默认目录。
@@ -15,6 +29,7 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import Input from '$lib/components/ui/input/Input.svelte';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import { Separator } from '$lib/components/ui/separator';
   import { Switch } from '$lib/components/ui/switch';
   import {
@@ -224,24 +239,17 @@
     <p class="text-xs text-muted-foreground">{t('settings.loading')}</p>
   {:else}
     <!-- 全局取词 -->
-    <Card data-section="hotkey">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('settings.hotkey.title')}</CardTitle>
-          <Badge variant="outline">hotkey</Badge>
-          {#if hotkeyValid}
-            <Badge variant="success">{t('settings.hotkey.valid')}</Badge>
-          {:else}
-            <Badge variant="outline" class="border-destructive/40 text-destructive">
-              {t('settings.hotkey.invalid')}
-            </Badge>
-          {/if}
-        </div>
-        <CardDescription>
-          {t('settings.hotkey.description')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard section={PAGE_SECTIONS.hotkey} descriptionKey="settings.hotkey.description">
+      {#snippet titleExtra()}
+        <Badge variant="outline">hotkey</Badge>
+        {#if hotkeyValid}
+          <Badge variant="success">{t('settings.hotkey.valid')}</Badge>
+        {:else}
+          <Badge variant="outline" class="border-destructive/40 text-destructive">
+            {t('settings.hotkey.invalid')}
+          </Badge>
+        {/if}
+      {/snippet}
         <label class="flex flex-col gap-1.5">
           <span class="text-xs font-medium">{t('settings.hotkey.label')}</span>
           <Input
@@ -280,16 +288,10 @@
             {t('settings.adminNote.p2')}
           </p>
         </div>
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 悬浮小窗 -->
-    <Card data-section="popup">
-      <CardHeader>
-        <CardTitle>{t('settings.popup.title')}</CardTitle>
-        <CardDescription>{t('settings.popup.description')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-4">
+    <SectionCard section={PAGE_SECTIONS.popup} descriptionKey="settings.popup.description" contentClass="flex flex-col gap-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <label class="flex flex-col gap-1.5">
             <span class="text-xs font-medium">{t('settings.popup.width')}</span>
@@ -355,16 +357,10 @@
             aria-label={t('settings.popup.alwaysOnTop')}
           />
         </div>
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 主题 -->
-    <Card data-section="appearance">
-      <CardHeader>
-        <CardTitle>{t('settings.appearance.title')}</CardTitle>
-        <CardDescription>{t('settings.appearance.description')}</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SectionCard section={PAGE_SECTIONS.appearance} descriptionKey="settings.appearance.description" contentClass="flex flex-col gap-1.5">
         <!-- 选中态读共享状态 theme.mode（与顶栏按钮、小窗同一份），不读本页表单副本 -->
         <div class="flex flex-wrap items-center gap-2" data-testid="theme-picker">
           {#each THEME_MODES as mode (mode)}
@@ -387,16 +383,10 @@
             {t('settings.appearance.currentTheme', { theme: themeLabel(theme.mode) })}
           </span>
         </div>
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 界面语言 -->
-    <Card data-section="language">
-      <CardHeader>
-        <CardTitle>{t('settings.language.title')}</CardTitle>
-        <CardDescription>{t('settings.language.description')}</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SectionCard section={PAGE_SECTIONS.language} descriptionKey="settings.language.description" contentClass="flex flex-col gap-1.5">
         <div class="flex flex-wrap items-center gap-2" data-testid="locale-picker">
           {#each availableLocales() as option (option.value)}
             <button
@@ -420,16 +410,10 @@
             </span>
           {/if}
         </div>
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 默认分词参数 -->
-    <Card data-section="tokenize">
-      <CardHeader>
-        <CardTitle>{t('settings.tokenize.title')}</CardTitle>
-        <CardDescription>{t('settings.tokenize.description')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-4">
+    <SectionCard section={PAGE_SECTIONS.tokenize} descriptionKey="settings.tokenize.description" contentClass="flex flex-col gap-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label class="flex flex-col gap-1.5">
             <span class="text-xs font-medium">{t('settings.tokenize.threads')}</span>
@@ -522,19 +506,13 @@
             />
           </div>
         </div>
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 目录 -->
-    <Card data-section="paths">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('settings.paths.title')}</CardTitle>
-          <Badge variant="outline">{t('settings.paths.dataDirBadge')}</Badge>
-        </div>
-        <CardDescription>{t('settings.paths.description')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard section={PAGE_SECTIONS.paths} descriptionKey="settings.paths.description">
+      {#snippet titleExtra()}
+        <Badge variant="outline">{t('settings.paths.dataDirBadge')}</Badge>
+      {/snippet}
         <label class="flex flex-col gap-1.5">
           <span class="text-xs font-medium">{t('settings.paths.corpusDir')}</span>
           <span class="flex flex-wrap items-center gap-2">
@@ -595,8 +573,7 @@
         {#if pickerHint}
           <p class="text-[11px] text-muted-foreground">{pickerHint}</p>
         {/if}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 保存 -->
     <div class="flex flex-wrap items-center gap-3">

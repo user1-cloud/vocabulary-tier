@@ -63,12 +63,26 @@
     if (section) activeSection = section;
   }
 
-  // 区块锚点滚动：$effect 在 DOM 更新后运行，正好落在页面重挂载完成之后
+  // 区块锚点滚动：$effect 在 DOM 更新后运行，正好落在页面重挂载完成之后。
+  // 目标区块可能是异步渲染的（如表管理页的 meta 在数据就绪后才出现），首次查不到时
+  // 轮询重试，最多 ~4.8s，避免「切页后锚点已设、目标却还没挂载」导致漏滚。
   $effect(() => {
     if (!pendingAnchor) return;
-    const el = document.querySelector(`[data-section="${pendingAnchor}"]`);
-    if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    pendingAnchor = null;
+    const target = pendingAnchor;
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = document.querySelector(`[data-section="${target}"]`);
+      if (el) {
+        el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        if (pendingAnchor === target) pendingAnchor = null;
+      } else if (attempts < 60) {
+        attempts += 1;
+        setTimeout(tryScroll, 80);
+      } else {
+        if (pendingAnchor === target) pendingAnchor = null;
+      }
+    };
+    tryScroll();
   });
 
   /**
