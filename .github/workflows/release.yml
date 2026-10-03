@@ -1,0 +1,56 @@
+# VocTier 发布流水线：tag v* 推送时自动建一个「草稿」GitHub Release + changelog。
+#
+# 设计：安装包不在 CI 构建（预制 seed 92MB 依赖本地语料，见 .gitignore），
+# 所以这里只负责：
+#   1. 用 git-cliff 从 tag 之间的 conventional commits 生成 changelog
+#   2. 创建一个 draft（草稿）Release，带名字 + changelog + 上传指引
+# 你本地构建好安装包后，手动上传到该草稿并 Publish：
+#   .\tools\prepare-seed.ps1
+#   .\tools\build-desktop.ps1 -Bundle
+#   产物：apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create draft release with changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要全部历史与 tags，git-cliff 才能对比上一个 tag
+
+      - uses: kenji-miyake/setup-git-cliff@v1
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          git cliff --config .github/cliff.toml --tag "${{ github.ref_name }}" -o "$RUNNER_TEMP/CHANGELOG_RELEASE.md"
+          {
+            echo "notes<<__EOF__"
+            cat "$RUNNER_TEMP/CHANGELOG_RELEASE.md"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: VocTier ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.notes }}
+          append_body: |
+            ## 安装包上传指引
+            本 Release 为**草稿**，请在本地构建后上传 NSIS 安装包并点 Publish：
+
+            ```
+            .\tools\prepare-seed.ps1
+            .\tools\build-desktop.ps1 -Bundle
+            ```
+
+            安装包产物：`apps/desktop/src-tauri/target/release/bundle/nsis/` 下的 `*-setup.exe`

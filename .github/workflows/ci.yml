@@ -1,0 +1,89 @@
+# VocTier 检查流水线：PR 与 main 分支每次变更都跑一遍，保证不坏。
+#
+# 三个 job 相互独立、并行：
+#   core              —— crates/vocfreq-core + vocfreq-cli 的格式、clippy、单测（Linux）
+#   desktop-frontend  —— Svelte 前端：类型检查 + 产物构建（Linux，不需要系统依赖）
+#   desktop-backend   —— src-tauri 的 Rust 编译检查（Windows，验证桌面侧能编译）
+#
+# 注意：这里刻意【不做】桌面安装包(bundle)。因为 NSIS 安装包依赖本地语料派生的
+# 预制 seed（src-tauri/seed/，被 .gitignore），CI 无法重建，见 release.yml。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: core + cli (cargo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+  desktop-frontend:
+    name: desktop frontend (pnpm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: install
+        run: pnpm install --frozen-lockfile
+
+      - name: svelte-check
+        run: pnpm check
+
+      - name: build
+        run: pnpm build
+
+  desktop-backend:
+    name: desktop backend (cargo check)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # tauri-build 的 build.rs 会读取 tauri.conf.json；这里只编译、不 bundle，
+      # 因此不触碰被 gitignore 的 seed/ 目录。
+      - name: cargo check
+        run: cargo check
