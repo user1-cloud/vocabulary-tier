@@ -117,7 +117,10 @@
   </div>
 
   <!-- 导航：分组 > 页面 > 区块 三层 -->
-  <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-1" aria-label={t('layout.mainNav')}>
+  <nav
+    class="scrollbar-thin flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-1"
+    aria-label={t('layout.mainNav')}
+  >
     {#each NAV_GROUPS as group (group.id)}
       {@const groupOpen = openGroups[group.id] ?? false}
       <SidebarGroup>
