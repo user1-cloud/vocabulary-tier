@@ -16,11 +16,27 @@ export const THEME_STORAGE_KEY = 'voctier-theme';
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
 
+/** 校验任意值是不是合法档位（跨窗口的两条同步路都靠它把关） */
+export function isThemeMode(value: unknown): value is ThemeMode {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
+
 /** 首屏脚本用的同一个 key，SSR/桌面环境下都安全 */
 export function readStoredTheme(): ThemeMode {
   if (typeof localStorage === 'undefined') return 'system';
   const raw = localStorage.getItem(THEME_STORAGE_KEY);
-  return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system';
+  return isThemeMode(raw) ? raw : 'system';
+}
+
+/** 本机是否已经存过明确选择（用来区分「首装 / 清过 storage」与「用户已经选过」） */
+function hasStoredTheme(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  try {
+    return isThemeMode(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch {
+    /* 隐私模式 / 存储被禁：当作没有记录，随后用设置文件里的值兜底 */
+    return false;
+  }
 }
 
 function prefersDark(): boolean {
@@ -63,6 +79,22 @@ export function setTheme(mode: ThemeMode): void {
   }
   applyTheme();
   emit('theme-changed', { theme: mode });
+}
+
+/**
+ * 采用设置文件里的主题（启动时的兜底）。
+ *
+ * 规则与界面语言的 `adoptLocaleFromSettings()` **完全一致**：只在本机**还没有明确
+ * 选择**（首次安装 / 清过 storage）时才采用设置文件里的值。
+ *
+ * 原因：顶栏与小窗的切换是立即生效的（`setTheme` 写 localStorage + 广播），而设置
+ * 文件里的 theme 要用户点「保存设置」才更新。启动时无条件覆盖，就会把用户刚切、
+ * 还没保存的主题顶回旧值。
+ */
+export function adoptThemeFromSettings(raw: string | null | undefined): void {
+  if (!isThemeMode(raw)) return;
+  if (hasStoredTheme()) return;
+  setTheme(raw);
 }
 
 /** 当前 mode 的下一个（浅色 → 深色 → 跟随系统 → 浅色）。小窗的一键切换用它 */

@@ -84,8 +84,10 @@ setupThemeSync();
  * 界面语言同理：两个窗口都要把当前语言打到 `<html lang>` 与窗口标题上，
  * 并订阅另一个窗口的语言变化（StorageEvent + Tauri 事件总线，见 $lib/locale-sync.ts）。
  *
- * `applyLocaleToDocument()` 用的是 `localStorage` 里的镜像值；后端设置里的权威值
- * 在各自窗口读到 `get_settings` 之后由 `adoptLocaleFromSettings()` 接管。
+ * `applyLocaleToDocument()` 用的是 `localStorage` 里的镜像值（它同时也是实时权威值）；
+ * 后端设置里的 locale / theme 只在本机**还没有记录**时兜底（首次安装 / 清过 storage），
+ * 由各窗口读到 `get_settings` 之后调
+ * `adoptLocaleFromSettings()` / `adoptThemeFromSettings()` 完成。
  */
 applyLocaleToDocument();
 setupLocaleSync();

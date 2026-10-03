@@ -30,7 +30,7 @@
   } from '$lib/api/bridge';
   import { adoptSettings, saveSettingsRespectingTierState } from '$lib/tiers.svelte';
   import { setTheme, theme, themeLabel, type ThemeMode } from '$lib/theme.svelte';
-  import { adoptLocaleFromSettings, availableLocales, locale, t } from '$lib/i18n.svelte';
+  import { availableLocales, locale, t } from '$lib/i18n.svelte';
   import { changeLocale } from '$lib/locale-sync';
   import { cn } from '$lib/utils';
   import type { AppInfo, Settings } from '$lib/types';
@@ -73,21 +73,14 @@
     markDirty();
   }
 
-  function isThemeMode(value: string): value is ThemeMode {
-    return value === 'light' || value === 'dark' || value === 'system';
-  }
-
   async function bootstrap() {
     loading = true;
     const [settingsRes, infoRes] = await Promise.all([getSettings(), appInfo()]);
     if (settingsRes.ok) {
-      form = { ...settingsRes.data };
-      // 让顶栏的主题按钮与这里的选择保持同步
-      if (isThemeMode(settingsRes.data.theme) && settingsRes.data.theme !== theme.mode) {
-        setTheme(settingsRes.data.theme);
-      }
-      // 界面语言同理：设置文件是权威值，localStorage 只是首屏的快速通道
-      adoptLocaleFromSettings(settingsRes.data.locale);
+      // ⚠️ 主题与语言都以**共享状态**里的实时值为准（见下面 `applyTheme` / `applyLocale`）：
+      // 设置文件里的这两个字段只在点「保存设置」时写入，读回来会把用户刚切、还没保存的
+      // 选择顶回去（顶栏 / 小窗的主题、本页刚切的语言都会中招）。
+      form = { ...settingsRes.data, theme: theme.mode, locale: locale.value };
     } else {
       statusTone = 'error';
       statusMessage = t('settings.readFailed', { error: settingsRes.error });
@@ -102,25 +95,26 @@
     statusMessage = '';
     // 分组自定义 / 表开关这几个字段的权威来源是 $lib/tiers.svelte.ts 里的共享状态：
     // 本页可能是在「表管理」页改完之后才打开的，直接拿本页 form 里的旧值会把它冲掉。
-    const res = await saveSettingsRespectingTierState({ ...form, hotkey: form.hotkey.trim() }, [
-      'tierMethod',
-      'tierWordBounds',
-      'tierCharBounds',
-      'tierCoverage',
-    ]);
+    // theme / locale 同理，而且它们比这几个字段更容易过期：顶栏、小窗随时能切主题，
+    // 语言在本页也是「切了立即生效」，所以**总是**以共享状态里的实时值为准
+    // （form 只用来标记「改过」，不作为权威值）。
+    const res = await saveSettingsRespectingTierState(
+      { ...form, theme: theme.mode, locale: locale.value, hotkey: form.hotkey.trim() },
+      ['tierMethod', 'tierWordBounds', 'tierCharBounds', 'tierCoverage']
+    );
     saving = false;
     if (!res.ok) {
       statusTone = 'error';
       statusMessage = t('settings.saveFailed', { error: res.error });
       return;
     }
-    form = { ...res.data };
+    form = { ...res.data, theme: theme.mode, locale: locale.value };
     adoptSettings(res.data);
     dirty = false;
     statusTone = 'success';
     statusMessage = t('settings.saved');
-    if (isThemeMode(res.data.theme)) setTheme(res.data.theme);
-    adoptLocaleFromSettings(res.data.locale);
+    // 这里**不要**再回写 theme / locale：落盘的就是刚发过去的实时值，而保存期间用户
+    // 还可能在顶栏再切一次主题、或再点一次语言，回写会把他那次切换顶回去。
   }
 
   /**
@@ -191,6 +185,13 @@
       : t('settings.captureOkText', { text: res.data });
   }
 
+  /**
+   * 切换主题：**立即生效**（`setTheme` 写共享状态 + localStorage + 广播给顶栏与小窗），
+   * 同时标脏；真正落盘要等用户点「保存设置」。
+   *
+   * 选中态读的是共享状态 `theme.mode`（见模板），不是本页 `form.theme`：顶栏 / 小窗
+   * 也改同一个值，读表单里的副本就会和它们脱钩。
+   */
   function applyTheme(value: ThemeMode) {
     patch({ theme: value });
     setTheme(value);
@@ -364,14 +365,16 @@
         <CardDescription>{t('settings.appearance.description')}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div class="flex flex-wrap items-center gap-2">
+        <!-- 选中态读共享状态 theme.mode（与顶栏按钮、小窗同一份），不读本页表单副本 -->
+        <div class="flex flex-wrap items-center gap-2" data-testid="theme-picker">
           {#each THEME_MODES as mode (mode)}
             <button
               type="button"
-              aria-pressed={form.theme === mode}
+              aria-pressed={theme.mode === mode}
+              data-theme-mode={mode}
               class={cn(
                 'rounded-md border px-3 py-1.5 text-xs transition-colors',
-                form.theme === mode
+                theme.mode === mode
                   ? 'border-primary/40 bg-primary/10 font-medium text-primary'
                   : 'border-border hover:bg-accent'
               )}

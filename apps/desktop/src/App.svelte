@@ -16,7 +16,7 @@
     NAVIGATE_EVENT,
     type RouteId,
   } from '$lib/navigation';
-  import { initTheme } from '$lib/theme.svelte';
+  import { adoptThemeFromSettings, initTheme } from '$lib/theme.svelte';
   import { adoptLocaleFromSettings, t } from '$lib/i18n.svelte';
   import { onPopupReply } from '$lib/api/bridge';
   import { loadTierSettings } from '$lib/tiers.svelte';
@@ -68,9 +68,11 @@
   // 失败时用 defaultSettings()，界面照 meta 默认阈值渲染，不会崩。
   $effect(() => {
     void loadTierSettings().then((res) => {
-      // 界面语言的**权威值**在设置里（localStorage 只是首屏的快速通道，
-      // 主窗口与小窗的存储可能被宿主隔开），读到就采用。
+      // 界面语言与主题都**只在「本机还没有明确选择」时**才采用设置文件里的值
+      // （localStorage 是首屏快速通道，也是实时权威值；设置文件里的这两个字段要等用户
+      // 点「保存设置」才更新，无条件采用会把刚切、还没保存的选择顶回去）。
       if (res.ok) adoptLocaleFromSettings(res.data.locale);
+      if (res.ok) adoptThemeFromSettings(res.data.theme);
     });
   });
 

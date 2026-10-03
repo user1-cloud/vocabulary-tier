@@ -599,9 +599,18 @@ CLI 的 `segment` 走同一套规则（`chain_from_meta`），并且会在指纹
 然后在 `LOCALES` / `MESSAGES` / `LOCALE_LABELS` 各加一行。设置页下拉、首屏 `<html lang>`、
 小窗同步、分组标签全都从注册表读，不用改别处。
 
-**语言存两处，与主题完全同构**：`Settings.locale` 是**权威值**（保证主窗口与小窗一致，
-两个 WebView 的 localStorage 可能被宿主隔开）；`localStorage['voctier-locale']` 只是首屏
-**同步**读取的快速通道，避免闪成错语言。读到设置后由 `adoptLocaleFromSettings()` 接管。
+**语言与主题存两处，规则相同（这是踩过坑的，别改回去）**
+
+| 存储 | 角色 |
+|---|---|
+| `localStorage['voctier-locale']` / `['voctier-theme']` | 首屏**同步**读的快速通道（避免闪成错语言/错主题），同时是**实时权威值**：切换后立即写入，两个窗口靠它 + 广播保持一致 |
+| `Settings.locale` / `Settings.theme` | 设置文件里的记录，**只在点「保存设置」时写入**；`adoptLocaleFromSettings()` / `adoptThemeFromSettings()` **只在本机还没有记录时**（首装 / 清过 storage）才采用它 |
+
+关键点：**设置文件里的这两个字段在保存前可能是旧值，绝不能拿它反过来覆盖实时状态**。踩过的坑：
+设置页与小窗每次挂载都读一次设置文件并无条件采用，于是「切英文 → 离开设置页再回来」变回中文、
+「顶栏切深色 → 进设置页」变回浅色；点「保存设置」时同理，会把表单里的旧值写回界面。所以
+设置页的选中态（`locale.value` / `theme.mode`）与保存时发出去的字段都以共享状态为准，
+不读本页表单副本。
 
 **纯度规则（重要，别破坏）**
 

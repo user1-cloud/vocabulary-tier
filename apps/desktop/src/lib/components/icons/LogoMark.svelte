@@ -5,12 +5,21 @@
 <svg
   xmlns="http://www.w3.org/2000/svg"
   viewBox="0 0 32 32"
-  fill="none"
   class="h-full w-full"
   aria-hidden="true"
 >
-  <rect width="32" height="32" rx="8" fill="currentColor" opacity="0.12" />
-  <rect x="8" y="16" width="3.5" height="8" rx="1.5" fill="currentColor" />
-  <rect x="14.25" y="11" width="3.5" height="13" rx="1.5" fill="currentColor" />
-  <rect x="20.5" y="6" width="3.5" height="18" rx="1.5" fill="currentColor" />
+  <defs>
+    <linearGradient id="vt-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#vt-bg)"/>
+  <rect x="3.0" y="23" width="2.6" height="4.0" rx="1.3" fill="#94a3b8"/>
+  <rect x="6.9" y="20" width="2.6" height="7.0" rx="1.3" fill="#4ade80"/>
+  <rect x="10.8" y="17" width="2.6" height="10.0" rx="1.3" fill="#60a5fa"/>
+  <rect x="14.7" y="14" width="2.6" height="13.0" rx="1.3" fill="#c084fc"/>
+  <rect x="18.6" y="11" width="2.6" height="16.0" rx="1.3" fill="#fb923c"/>
+  <rect x="22.5" y="8" width="2.6" height="19.0" rx="1.3" fill="#f87171"/>
+  <rect x="26.4" y="5" width="2.6" height="22.0" rx="1.3" fill="#facc15"/>
 </svg>

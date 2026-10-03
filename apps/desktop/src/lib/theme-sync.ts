@@ -22,15 +22,11 @@
  */
 import { on } from './events';
 import { emitTheme, onTheme, THEME_EVENT } from './api/bridge';
-import { applyTheme, theme, themeLabel, type ThemeMode } from './theme.svelte';
+import { applyTheme, isThemeMode, theme, themeLabel, type ThemeMode } from './theme.svelte';
 import { t } from './i18n.svelte';
 
 /** 与 Rust 侧 / 另一个窗口对齐的 localStorage key（见 theme.svelte.ts） */
 const STORAGE_KEY = 'voctier-theme';
-
-function isThemeMode(value: unknown): value is ThemeMode {
-  return value === 'light' || value === 'dark' || value === 'system';
-}
 
 let attached = false;
 

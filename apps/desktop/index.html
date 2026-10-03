@@ -12,9 +12,12 @@
       (function () {
         try {
           var stored = localStorage.getItem('voctier-theme');
+          // 'system'（以及没有记录）都表示「跟随系统」，之前只认 'dark'，
+          // 系统偏好深色 + 选了「跟随系统」时首帧会闪一下浅色。
           var dark =
             stored === 'dark' ||
-            (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            ((!stored || stored === 'system') &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
           document.documentElement.classList.toggle('dark', dark);
           // 同理先把界面语言的 <html lang> 落上（key 见 src/lib/i18n.svelte.ts）。
           // 标题不在这里改：本地化标题要查消息表，交给 main.ts 里的 applyLocaleToDocument()。

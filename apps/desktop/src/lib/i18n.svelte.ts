@@ -19,10 +19,12 @@
  *
  * ## 语言从哪来
  *
- * 两条路，和主题完全同构（见 `theme.svelte.ts`）：
- *   1. `localStorage`（key：`voctier-locale`）—— 首屏**同步**读，避免闪成错语言；
- *   2. 后端 `Settings.locale` —— 权威值，保证主窗口与小窗一致（两窗口的
- *      localStorage 可能被宿主隔开，见 `theme-sync.ts` 的说明）。
+ * 两条路（与主题**同一套规则**，见 `theme.svelte.ts`）：
+ *   1. `localStorage`（key：`voctier-locale`）—— 首屏**同步**读（避免闪成错语言），
+ *      并且是**实时权威值**：切换后立即写入，主窗口与小窗靠它 + 广播保持一致；
+ *   2. 后端 `Settings.locale` —— 只在**本机还没有记录**时兜底（首次安装 / 清过 storage），
+ *      以及点「保存设置」时被写回。保存之前它可能是旧值，所以**不能**反过来覆盖实时状态
+ *      （见 `adoptLocaleFromSettings()`）。
  *
  * ## 依赖方向（很重要，别破坏）
  *
@@ -54,6 +56,17 @@ export function readStoredLocale(): Locale {
   } catch {
     /* 隐私模式 / 存储被禁：用默认语言，不抛 */
     return DEFAULT_LOCALE;
+  }
+}
+
+/** 本机是否已经存过明确选择（用来区分「首装 / 清过 storage」与「用户已经选过」） */
+function hasStoredLocale(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  try {
+    return isLocale(localStorage.getItem(LOCALE_STORAGE_KEY));
+  } catch {
+    /* 隐私模式 / 存储被禁：当作没有记录，随后用设置文件里的值兜底 */
+    return false;
   }
 }
 
@@ -121,22 +134,29 @@ export function splitMessage(
 }
 
 /**
- * 切换界面语言。
+ * 切换界面语言（幂等）。
  *
  * 写 localStorage 会触发 `StorageEvent`，从而被 `locale-sync.ts` 转发到另一个窗口
- * （小窗），所以这里**只**管本窗口的状态与 DOM。
+ * （小窗），所以这里**只**管本窗口的状态、首屏快速通道与 DOM。
  */
 export function setLocale(next: Locale): void {
-  if (!isLocale(next) || next === locale.value) return;
+  if (!isLocale(next)) return;
+  // 同值也要走完下面两步（$state 赋同值不会触发重渲染，所以这里不必特判）：
+  // `adoptLocaleFromSettings()` 在首装时正好传入当前值，而那时 localStorage 还是空的，
+  // 不补镜像就白叫「首屏快速通道」。
   locale.value = next;
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(LOCALE_STORAGE_KEY, next);
-    } catch {
-      /* 隐私模式忽略 */
-    }
-  }
+  mirrorLocale(next);
   applyLocaleToDocument();
+}
+
+/** 把语言写进 localStorage（首屏快速通道）；隐私模式下静默失败 */
+function mirrorLocale(next: Locale): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(LOCALE_STORAGE_KEY, next);
+  } catch {
+    /* 隐私模式忽略 */
+  }
 }
 
 /** 把语言落到 DOM（`<html lang>` 与窗口标题）；幂等 */
@@ -147,17 +167,20 @@ export function applyLocaleToDocument(): void {
 }
 
 /**
- * 采用后端设置里的语言（权威值）。
+ * 采用后端设置里的语言（启动时的**兜底**）。
  *
- * 与主题的处理方式一致：localStorage 只是首屏的快速通道，真正说了算的是设置文件；
- * 两者不一致时（例如换了机器、清了 storage）以后端为准。
+ * 与主题的 `adoptThemeFromSettings()` 是**同一套规则**：只在本机**还没有明确选择**
+ * （首次安装 / 清过 storage）时才采用设置文件里的值。
+ *
+ * 为什么不能无条件采用：语言是「切了立即生效」的（写 localStorage + 广播），而
+ * `Settings.locale` 要用户点「保存设置」才更新。无条件覆盖会让
+ * 「切英文 → 进一次设置页 / 重启」变回旧语言 —— 设置页与小窗每次挂载都会调本函数，
+ * 那条路尤其明显（界面上表现为「离开时是新语言，回来又变回旧的」）。
  */
 export function adoptLocaleFromSettings(raw: string | null | undefined): void {
   if (!isLocale(raw)) return;
-  if (raw === locale.value) {
-    applyLocaleToDocument();
-    return;
-  }
+  // 本机已经有明确选择：以它为准，别拿设置文件里的旧值顶回去
+  if (hasStoredLocale()) return;
   setLocale(raw);
 }
 
