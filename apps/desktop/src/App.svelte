@@ -87,9 +87,20 @@
       if (typeof detail !== 'string' || detail.length === 0) return;
       goToSentences(detail);
     };
-    const onPopup = (text: string) => {
+    const onPopup = async (text: string) => {
       if (!text) return;
       goToSentences(text);
+      // 「发回主窗口」必须把主窗口带回前台：只改路由状态的话，主窗口若被
+      // 最小化、或在后台被其它窗口盖住，用户会以为「没反应」。
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const win = getCurrentWindow();
+        await win.unminimize();
+        await win.show();
+        await win.setFocus();
+      } catch {
+        /* 主窗口操作失败不影响文本回传本身 */
+      }
     };
 
     window.addEventListener(NAVIGATE_EVENT, onNavigate);
