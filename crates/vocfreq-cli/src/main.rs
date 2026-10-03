@@ -1024,7 +1024,7 @@ fn cmd_info(table: PathBuf) -> Result<()> {
         h.index_offset, h.heads_offset, h.rank_index_offset
     );
     println!("\n前 10 名：");
-    println!("{:>6}  {:>12}  {:>9}  {}", "排名", "频次", "占比", "词");
+    println!("{:>6}  {:>12}  {:>9}  词", "排名", "频次", "占比");
     for e in t.range_by_rank(1, 10) {
         let pct = e.count as f64 * 100.0 / h.total_tokens.max(1) as f64;
         println!("{:>6}  {:>12}  {:>8.5}%  {}", e.rank, e.count, pct, e.word);
@@ -1056,7 +1056,7 @@ fn cmd_lookup(table: PathBuf, words: Vec<String>, top: u32) -> Result<()> {
     if words.is_empty() {
         return Ok(());
     }
-    println!("{:>8}  {:>12}  {:>9}  {}", "排名", "频次", "占比", "词");
+    println!("{:>8}  {:>12}  {:>9}  词", "排名", "频次", "占比");
     for w in &words {
         match t.lookup(w) {
             Some(h) => println!(

@@ -204,11 +204,7 @@ fn scan_writes_flat_scopes_and_compose_matches_full() {
 
     // meta：path 是纯表组名，tier_pct 有 6 个值
     for t in &meta.tables {
-        assert!(
-            !t.path.contains('/'),
-            "{} 的 path 应该是纯表组名",
-            t.key()
-        );
+        assert!(!t.path.contains('/'), "{} 的 path 应该是纯表组名", t.key());
         assert_eq!(t.tier_pct.len(), 6, "{} 缺少前%上界", t.key());
         assert_eq!(t.tiers.len(), 7);
     }
