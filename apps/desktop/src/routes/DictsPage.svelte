@@ -1,16 +1,16 @@
 <script lang="ts">
   /**
-   * 词库管理 —— 数据文件夹 `dicts\` 里的 `.dict` 清单。
+   * 词典管理 —— 数据文件夹 `dicts\` 里的 `.dict` 清单。
    *
-   * 词库外置之后这一页是**入口页**：安装包只是"帮你放了两个进去"，预置项与用户
+   * 词典外置之后这一页是**入口页**：安装包只是"帮你放了两个进去"，预置项与用户
    * 自己导入的完全是同一种东西（**没有权限等级**，预置项同样可删），所以这里
    * 只有一个纯展示用的来源徽标。
    *
    * 两件必须说清楚的事：
-   *   1. **隐患**。词库是普通文本文件，用户会拿记事本改。`report` 里的 `freq_zero`
+   *   1. **隐患**。词典是普通文本文件，用户会拿记事本改。`report` 里的 `freq_zero`
    *     （显式写了 0 → 这些词永远切不出来）与 `freq_omitted`（没写词频 → 按
    *     建议值折算）在界面上必须显眼，否则用户只会看到"某些词怎么查不到"。
-   *   2. **删除的连带影响**。删掉被某张表引用的词库，那张表就变成「词库缺失」，
+   *   2. **删除的连带影响**。删掉被某张表引用的词典，那张表就变成「词典缺失」，
    *      频次不再可信。所以确认时要把"哪些表用到它"列出来 —— 用
    *      `table_list()` 里每张表 `meta.tokenizer.dicts` 的 `name` 反查。
    *
@@ -64,7 +64,7 @@
   let notice = $state('');
   let noticeTone = $state<'info' | 'error' | 'success'>('info');
 
-  /** 等待确认删除的词库文件名（null = 没有待确认的删除） */
+  /** 等待确认删除的词典文件名（null = 没有待确认的删除） */
   let pendingDelete = $state<string | null>(null);
 
   const hasUsable = $derived(dicts.some((item) => item.error === null));
@@ -72,7 +72,7 @@
   /**
    * `dictRef.sha256（小写）→ 用到它的表名`。
    *
-   * 按**指纹**反查而不是按名字：后端就是按「指纹 → 名字」匹配的，重名的两份词库
+   * 按**指纹**反查而不是按名字：后端就是按「指纹 → 名字」匹配的，重名的两份词典
    * 只有指纹能区分。名字只作为兜底（v1 老产物没有指纹）。
    */
   const dictUsage = $derived.by(() => {
@@ -91,7 +91,7 @@
     return { byHash, byName };
   });
 
-  /** 哪些表用到了这份词库（去重，保序） */
+  /** 哪些表用到了这份词典（去重，保序） */
   function usedBy(item: DictItem): string[] {
     const names = new Set<string>();
     if (item.file_name.endsWith('.dict')) names.add(item.file_name.slice(0, -'.dict'.length));
@@ -122,7 +122,7 @@
     }, 5000);
   }
 
-  /** 拉一次数据文件夹状况 + 词库清单 + 词表清单（词表清单用来反查引用关系） */
+  /** 拉一次数据文件夹状况 + 词典清单 + 词频表清单（词频表清单用来反查引用关系） */
   async function refresh() {
     const [infoRes, dictRes, tableRes, readyRes] = await Promise.all([
       libraryInfo(),
@@ -247,7 +247,7 @@
     </Card>
   {:else}
     <!-- ============================ 数据文件夹 ============================ -->
-    <Card data-testid="dicts-library-card">
+    <Card data-testid="dicts-library-card" data-section="datadir">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('dicts.dataDirTitle')}</CardTitle>
@@ -313,8 +313,8 @@
       </Card>
     {/if}
 
-    <!-- ============================ 词库清单 ============================ -->
-    <Card data-testid="dicts-list-card">
+    <!-- ============================ 词典清单 ============================ -->
+    <Card data-testid="dicts-list-card" data-section="list">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('dicts.listTitle')}</CardTitle>
@@ -407,7 +407,7 @@
               </p>
             {/if}
 
-            <!-- 删除确认：就地展开，列出用到它的表（删了那些表就「词库缺失」） -->
+            <!-- 删除确认：就地展开，列出用到它的表（删了那些表就「词典缺失」） -->
             {#if pendingDelete === item.file_name}
               <div
                 class="flex flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"

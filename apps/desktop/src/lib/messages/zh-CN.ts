@@ -528,10 +528,14 @@ export const zhCN = {
   'tables.listTitle': '频率表',
   'tables.tableCountBadge': '{count} 张表',
   'tables.scopeCountBadge': '{count} 个作用域',
-  'tables.primaryBadge': '主表：{scope}',
+  'tables.primaryBadge': '主分域：{scope}',
+  'tables.primaryDomain.title': '主分域',
+  'tables.primaryDomain.description':
+    '主分域决定"这个词有多常见"的唯一口径。一个分域 = 该域的词频表 + 字表，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余分域只做对比。',
+  'tables.primaryDomain.scopeSummary': '词表 {word} 条 · 字表 {char} 条',
   'tables.primaryDescription':
     '每个作用域各有一张词频表 + 一张字表，它们**完全平级**（`full` 只是"所有域加在一起"的那一个）。{emphasis}，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表只做对比。',
-  'tables.primaryEmphasis': '勾选「主表」决定"这个词有多常见"',
+  'tables.primaryEmphasis': '主分域决定"这个词有多常见"',
   'tables.equalNote':
     '表格里每张表都是同一份产物里的一个作用域，没有全库表与分域表的区别。想换一个"最常见"的基准就改主表；想把几个域合成一张新表就用下面的「相加」。',
   'tables.primarySet': '主词频表已切换为「{scope}」。',

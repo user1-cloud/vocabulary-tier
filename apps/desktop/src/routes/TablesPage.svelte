@@ -573,6 +573,10 @@
       showNotice(t('tables.primaryFailed', { scope, error: res.error }), 'error');
       return;
     }
+    // 后端已把 primary_scope 持久化并重开数据集；这里必须同步前端共享状态，
+    // 否则 primaryScope(meta) 读到的还是旧值，会一路回退到 full ——
+    // 造成「改了主分域却仍显示/生效为 full」的前后端口径分裂。
+    appSettings.value.primaryScope = scope;
     meta = res.data;
     curves = { word: null, char: null };
     showNotice(t('tables.primarySet', { scope }), 'success');

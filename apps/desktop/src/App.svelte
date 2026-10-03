@@ -37,6 +37,15 @@
    */
   let routeEpoch = $state(0);
 
+  /** 当前定位到的区块（Sidebar 内部高亮，bind 到 Sidebar 的 activeSection） */
+  let activeSection = $state<string | undefined>(undefined);
+
+  /**
+   * 待消费的区块锚点：点击侧栏区块小点时记下，等目标页面重挂载完成后
+   * 由下方 $effect 滚动到对应 data-section 区块。消费完即清空。
+   */
+  let pendingAnchor = $state<string | null>(null);
+
   /** 顶栏标题 / 描述由路由表派生，避免两处手写不一致 */
   const current = $derived(findNavItem(route));
 
@@ -44,6 +53,23 @@
     route = target;
     if (epochBump) routeEpoch += 1;
   }
+
+  /** 侧栏区块小点跳转：切到目标页（必要时重挂载）并记录要滚到的锚点 */
+  function goToSection(page: RouteId, section?: string) {
+    const needReload = page !== route;
+    route = page;
+    if (needReload) routeEpoch += 1;
+    pendingAnchor = section ?? null;
+    if (section) activeSection = section;
+  }
+
+  // 区块锚点滚动：$effect 在 DOM 更新后运行，正好落在页面重挂载完成之后
+  $effect(() => {
+    if (!pendingAnchor) return;
+    const el = document.querySelector(`[data-section="${pendingAnchor}"]`);
+    if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    pendingAnchor = null;
+  });
 
   /**
    * 待注入划句分析页的文本（来自排行榜「加入分析」或悬浮小窗回传）。
@@ -117,7 +143,7 @@
 </script>
 
 <div class="flex h-full w-full overflow-hidden bg-background text-foreground">
-  <Sidebar bind:active={route} />
+  <Sidebar bind:active={route} bind:activeSection onNavigate={goToSection} />
 
   <div class="flex min-w-0 flex-1 flex-col">
     <Topbar title={t(current.titleKey)} description={t(current.descriptionKey)} />

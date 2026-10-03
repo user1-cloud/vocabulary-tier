@@ -526,10 +526,14 @@ export const en: Messages = {
   'tables.listTitle': 'Frequency tables',
   'tables.tableCountBadge': '{count} tables',
   'tables.scopeCountBadge': '{count} scopes',
-  'tables.primaryBadge': 'Primary: {scope}',
+  'tables.primaryBadge': 'Primary domain: {scope}',
+  'tables.primaryDomain.title': 'Primary domain',
+  'tables.primaryDomain.description':
+    'The primary domain is the single source of truth for “how common is this word”: one domain = that domain’s word table + char table. Coloring, grouping and the leaderboard all use it; other domains are for comparison only.',
+  'tables.primaryDomain.scopeSummary': 'word {word} · char {char}',
   'tables.primaryDescription':
     'Every scope has one word table and one char table, and they are **fully equal** (`full` is merely “all domains added together”). {emphasis}; sentence-analysis colouring and tiers, the leaderboard, and the tier preview all follow it, while the other tables are only shown for comparison.',
-  'tables.primaryEmphasis': 'ticking “primary” decides which table answers “how common is this word”',
+  'tables.primaryEmphasis': 'the primary domain decides which table answers “how common is this word”',
   'tables.equalNote':
     'Each row is just one scope of the same output — there is no full-corpus vs. domain distinction. To change the “most common” baseline, change the primary table; to merge several domains, use “Add up” below.',
   'tables.primarySet': 'Primary table switched to “{scope}”.',

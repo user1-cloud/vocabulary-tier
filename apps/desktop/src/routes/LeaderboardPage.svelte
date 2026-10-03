@@ -2,7 +2,7 @@
   /**
    * 排行榜 —— 全库 / 各分域的排名浏览。
    *
-   *   - 域切换（全库 + 各分域）、词表 / 字表切换
+   *   - 域切换（全库 + 各分域）、词频表 / 字表切换
    *   - 分页（每页 100，用 list_rank 的 from/limit，from 从 1 开始）
    *   - 前缀搜索（search_words）
    *   - 七组筛选（对当前已加载页做客户端过滤，界面上明确说明）
@@ -437,7 +437,7 @@
     </Card>
   {:else}
     <!-- 控制区 -->
-    <Card>
+    <Card data-section="control">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('leaderboard.title')}</CardTitle>
@@ -495,7 +495,7 @@
         <Separator />
 
         <div class="flex flex-wrap items-center gap-2">
-          <!-- 词表 / 字表 -->
+          <!-- 词频表 / 字表 -->
           <div class="flex items-center gap-1 rounded-md border border-border p-0.5">
             <button
               type="button"
@@ -590,7 +590,7 @@
     </Card>
 
     <!-- 表格 -->
-    <Card>
+    <Card data-section="ranklist">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('leaderboard.rankListTitle')}</CardTitle>

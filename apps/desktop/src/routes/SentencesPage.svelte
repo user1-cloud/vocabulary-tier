@@ -129,7 +129,7 @@
   /**
    * 生效阈值：默认 = meta 里的默认分组；用户在「表管理」页改过就是自定义的。
    *
-   * 词表阈值给图例用；字表阈值不用在这里算 —— 详情面板（TokenDetail）自己按
+   * 词频表阈值给图例用；字表阈值不用在这里算 —— 详情面板（TokenDetail）自己按
    * token 是词还是字调用 `boundsInfo` 现算，保证与着色用同一套权威实现。
    */
   const wordBounds = $derived(meta ? activeBounds('word', meta) : []);
@@ -193,7 +193,7 @@
       return;
     }
     activeMeta = res.data;
-    // 后端按记录的词库链重建分词器是在激活表时做的，这里只取 meta；
+    // 后端按记录的词典链重建分词器是在激活表时做的，这里只取 meta；
     // 分域默认查全部（空数组），与后端约定一致。
     compareScopes = [];
     // 顺带记下产物目录（只用于页面展示）
@@ -418,7 +418,7 @@
       </CardContent>
     </Card>
   {:else if !ready}
-    <!-- 还没有打开任何词表：引导去生成词频表 / 词库管理 -->
+    <!-- 还没有打开任何词频表：引导去生成词频表 / 词典管理 -->
     <Card class="border-dashed">
       <CardHeader>
         <div class="flex items-center gap-2">
@@ -448,7 +448,7 @@
     </Card>
   {:else}
     <!-- 数据集概览 -->
-    <Card>
+    <Card data-section="dataset">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('sentences.dataset.title')}</CardTitle>
@@ -502,7 +502,7 @@
     <div class="analysis-layout">
       <div class="analysis-main">
         <!-- 输入区 -->
-        <Card>
+        <Card data-section="input">
           <CardHeader>
             <div class="flex flex-wrap items-center gap-2">
               <CardTitle>{t('sentences.input.title')}</CardTitle>
@@ -632,7 +632,7 @@
         </Card>
 
         <!-- 分析结果 -->
-        <Card>
+        <Card data-section="result">
           <CardHeader>
             <div class="flex flex-wrap items-center gap-2">
               <CardTitle>{t('sentences.result.title')}</CardTitle>

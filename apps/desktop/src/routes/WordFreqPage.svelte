@@ -80,18 +80,18 @@
   });
 
   /**
-   * 词库链（`dicts\` 下的文件名，**顺序有意义：第一个是主词库**）。
+   * 词典链（`dicts\` 下的文件名，**顺序有意义：第一个是主词典**）。
    *
    * 空数组 = 用数据文件夹里全部 `.dict`（后端按文件名排序）。这是"我没特别指定"
    * 的意思，与"我全勾上了"在界面上要区分开，所以单独用这个数组表示勾选。
    */
   let selectedDicts = $state<string[]>([]);
 
-  /** 数据文件夹里的词库清单（进页面拉一次；`dict_list` 会逐个读文件，别反复调） */
+  /** 数据文件夹里的词典清单（进页面拉一次；`dict_list` 会逐个读文件，别反复调） */
   let dictItems = $state<DictItem[]>([]);
   let dictsLoading = $state(true);
 
-  /** 数据文件夹里有没有可用词库：false 时禁止开始统计（空词库会跑出一张只有单字的废表） */
+  /** 数据文件夹里有没有可用词典：false 时禁止开始统计（空词典会跑出一张只有单字的废表） */
   let libReady = $state(true);
   let libReadyChecked = $state(false);
 
@@ -140,17 +140,17 @@
     form.corpus.trim().length > 0 && form.out.trim().length > 0 && !scanning && libReady
   );
 
-  /** 可用的词库（坏文件不给勾：勾了后端也会当作不存在，静默跳过反而更迷惑） */
+  /** 可用的词典（坏文件不给勾：勾了后端也会当作不存在，静默跳过反而更迷惑） */
   const usableDicts = $derived(dictItems.filter((item) => item.error === null));
 
-  /** 勾选的词库按**勾选顺序**给出的名字（第一个是主词库） */
+  /** 勾选的词典按**勾选顺序**给出的名字（第一个是主词典） */
   const dictChain = $derived(
     selectedDicts
       .map((file) => dictItems.find((item) => item.file_name === file))
       .filter((item): item is DictItem => item !== undefined)
   );
 
-  /** 没勾任何词库时实际会用到的（后端按文件名排序取全部 `.dict`） */
+  /** 没勾任何词典时实际会用到的（后端按文件名排序取全部 `.dict`） */
   const effectiveChain = $derived(
     [...(selectedDicts.length > 0 ? dictChain : usableDicts)].sort((a, b) =>
       a.file_name.localeCompare(b.file_name)
@@ -167,7 +167,7 @@
   const resultTables = $derived(result?.tables ?? []);
 
   /**
-   * 产物记录的词库链（`dicts[0]` 是主词库）。
+   * 产物记录的词典链（`dicts[0]` 是主词典）。
    *
    * `dict` / `user_dict` 是 v1 老字段、只读不写，所以统一走 `resolvedDicts()`
    * （它会在 `dicts` 为空时回退到那两个老字段），不要在模板里直接用它们。
@@ -300,7 +300,7 @@
     loading = false;
   }
 
-  /** 拉一次「当前有没有打开表」+ 词库清单，并让输出目录跟着表名走 */
+  /** 拉一次「当前有没有打开表」+ 词典清单，并让输出目录跟着表名走 */
   async function loadLibrary() {
     dictsLoading = true;
     const [dictRes, readyRes, activeRes] = await Promise.all([
@@ -342,7 +342,7 @@
     if (settings.scanDicts) selectedDicts = [...settings.scanDicts];
   }
 
-  /** 用户没填表名时的默认值：用「新的词表」（后端会洗成合法目录名） */
+  /** 用户没填表名时的默认值：用「新的词频表」（后端会洗成合法目录名） */
   function defaultTableName(corpusDir: string | null | undefined): string {
     const base = (corpusDir ?? '').split(/[\\/]/).filter(Boolean).pop();
     return base ? t('wordfreq.step3.defaultTableName', { corpus: base }) : t('wordfreq.step3.newTable');
@@ -362,7 +362,7 @@
       skipSingleChar: form.skipSingleChar,
       minCount: form.minCount,
       skipDomainTables: form.skipDomainTables,
-      // 词库链：空数组与 null 在后端是同一个意思，但显式给 null 更好读
+      // 词典链：空数组与 null 在后端是同一个意思，但显式给 null 更好读
       scanDicts: selectedDicts.length > 0 ? [...selectedDicts] : null,
     };
     const saved = await setSettings(merged);
@@ -376,7 +376,7 @@
    *
    * 需要在两处判断"当前输出目录还是不是系统预填的那个"：
    *   1. 表名输入框每次变化时（见下面的 `$effect`）；
-   *   2. 词库清单 / 数据文件夹就绪之前，`suggest_table_dir` 还调不了。
+   *   2. 词典清单 / 数据文件夹就绪之前，`suggest_table_dir` 还调不了。
    * 记下来就不必反复问后端（它是同步命令，但每次输入都问一遍没必要）。
    */
   let suggestedPaths = $state<string[]>([]);
@@ -463,7 +463,7 @@
     const params: ScanParams = {
       corpus: form.corpus.trim(),
       out: form.out.trim(),
-      // 词库链（`dicts\` 下的文件名，第一个是主词库）；空数组 = 用全部 `.dict`
+      // 词典链（`dicts\` 下的文件名，第一个是主词典）；空数组 = 用全部 `.dict`
       dictFiles: [...selectedDicts],
       threads: Number.isFinite(form.threads) ? Math.max(0, Math.trunc(form.threads)) : 0,
       hmm: form.hmm,
@@ -500,9 +500,9 @@
   }
 
   /**
-   * 勾选 / 取消一份词库。
+   * 勾选 / 取消一份词典。
    *
-   * 新勾的**追加到末尾**（而不是按文件名插回原位）：词库链的顺序会影响同名条目的
+   * 新勾的**追加到末尾**（而不是按文件名插回原位）：词典链的顺序会影响同名条目的
    * 覆盖结果，用户按自己想要的优先级依次勾选是最自然的表达方式。想调顺序就取消
    * 再重勾，界面上"第 2 份"这类徽标会跟着变。
    */
@@ -555,7 +555,7 @@
     </div>
   {/if}
 
-  <!-- 当前打开的那张表：统计完成后会自动刷新；没有表时给个去词表管理的入口 -->
+  <!-- 当前打开的那张表：统计完成后会自动刷新；没有表时给个去词频表管理的入口 -->
   <div
     class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-muted/40 px-3 py-2 text-xs"
     data-testid="current-table"
@@ -609,7 +609,7 @@
   </div>
 
   <!-- ① 语料库 -->
-  <Card>
+  <Card data-section="step1">
     <CardHeader>
       <div class="flex items-center gap-2">
         <CardTitle>{t('wordfreq.step1.title')}</CardTitle>
@@ -703,7 +703,7 @@
   </Card>
 
   <!-- ② 参数 -->
-  <Card>
+  <Card data-section="step2">
     <CardHeader>
       <div class="flex items-center gap-2">
         <CardTitle>{t('wordfreq.step2.title')}</CardTitle>
@@ -725,7 +725,7 @@
 
       <Separator />
 
-      <!-- 词库链：多选，**顺序有意义**（第一个是主词库） -->
+      <!-- 词典链：多选，**顺序有意义**（第一个是主词典） -->
       <div class="flex flex-col gap-2" data-testid="dict-chain-picker">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-medium">{t('wordfreq.step2.dictChain')}</span>
@@ -758,7 +758,7 @@
             {t('wordfreq.step2.noUsableDict')}
           </p>
         {:else}
-          <!-- 勾选顺序 = 词库链顺序；第一条 = 主词库 -->
+          <!-- 勾选顺序 = 词典链顺序；第一条 = 主词典 -->
           <ol class="flex flex-col gap-1.5">
             {#each dictItems as item (item.file_name)}
               {@const order = selectedDicts.indexOf(item.file_name)}
@@ -876,7 +876,7 @@
   </Card>
 
   <!-- ③ 输出与执行 -->
-  <Card>
+  <Card data-section="step3">
     <CardHeader>
       <div class="flex items-center gap-2">
         <CardTitle>{t('wordfreq.step3.title')}</CardTitle>
@@ -930,7 +930,7 @@
         </Button>
       </div>
 
-      <!-- 数据文件夹里没有可用词库时不放行：空词库会跑出一张只有单字的废表 -->
+      <!-- 数据文件夹里没有可用词典时不放行：空词典会跑出一张只有单字的废表 -->
       {#if libReadyChecked && !libReady}
         <div
           class="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive"

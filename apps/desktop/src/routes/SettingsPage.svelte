@@ -224,7 +224,7 @@
     <p class="text-xs text-muted-foreground">{t('settings.loading')}</p>
   {:else}
     <!-- 全局取词 -->
-    <Card>
+    <Card data-section="hotkey">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('settings.hotkey.title')}</CardTitle>
@@ -284,7 +284,7 @@
     </Card>
 
     <!-- 悬浮小窗 -->
-    <Card>
+    <Card data-section="popup">
       <CardHeader>
         <CardTitle>{t('settings.popup.title')}</CardTitle>
         <CardDescription>{t('settings.popup.description')}</CardDescription>
@@ -359,7 +359,7 @@
     </Card>
 
     <!-- 主题 -->
-    <Card>
+    <Card data-section="appearance">
       <CardHeader>
         <CardTitle>{t('settings.appearance.title')}</CardTitle>
         <CardDescription>{t('settings.appearance.description')}</CardDescription>
@@ -391,7 +391,7 @@
     </Card>
 
     <!-- 界面语言 -->
-    <Card>
+    <Card data-section="language">
       <CardHeader>
         <CardTitle>{t('settings.language.title')}</CardTitle>
         <CardDescription>{t('settings.language.description')}</CardDescription>
@@ -424,7 +424,7 @@
     </Card>
 
     <!-- 默认分词参数 -->
-    <Card>
+    <Card data-section="tokenize">
       <CardHeader>
         <CardTitle>{t('settings.tokenize.title')}</CardTitle>
         <CardDescription>{t('settings.tokenize.description')}</CardDescription>
@@ -526,7 +526,7 @@
     </Card>
 
     <!-- 目录 -->
-    <Card>
+    <Card data-section="paths">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('settings.paths.title')}</CardTitle>
@@ -553,7 +553,7 @@
           </span>
         </label>
 
-        <!-- 数据文件夹：里面是 dicts\（词库库）与 tables\（词表库） -->
+        <!-- 数据文件夹：里面是 dicts\（词典库）与 tables\（词频表库） -->
         <label class="flex flex-col gap-1.5">
           <span class="text-xs font-medium">{t('settings.paths.dataDir')}</span>
           <span class="flex flex-wrap items-center gap-2">
@@ -580,7 +580,7 @@
 
         <Separator />
 
-        <!-- `userDict` 已废弃：词库现在是数据文件夹里的条目，在扫描时勾选 -->
+        <!-- `userDict` 已废弃：词典现在是数据文件夹里的条目，在扫描时勾选 -->
         <div
           class="flex flex-col gap-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300"
           data-testid="userdict-deprecated"
