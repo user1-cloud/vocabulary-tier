@@ -13,26 +13,26 @@
 
 ---
 
-## 一、为什么要自己统计，而不是用 jieba 自带的词频
+## 一、使用说明
 
-jieba 词典第三列确实是词频，但**它是分词用的概率权重，不是词频统计**。实测你手上这份 `dict.txt`（349,045 条 —— 注意长期在文档与代码里写的 349,046 是个**多算一条**的数字，它来自 jieba 内部 `count('\n') + 1` 的预留估算，不是真实条目数；`vocfreq` 现在报的是逐行解析出来的真实值）：
+### 快速使用
 
-| 现象 | 数据 |
-|---|---|
-| 权重恰好等于保底值 `3` 的条目 | **159,318 条（45.6%）** |
-| 权重等于 `2` 的条目 | 40,502 条 |
-| 两者合计 | **57.2%** |
-| 「的」的排名 | 第 **9** 位（318,825），低于「了」（883,634） |
+#### 1. 桌面端（下载 Release 直接使用）
 
-真实中文语料里「的」永远排第一。所以拿它判断稀有度，一半以上的词会显示成「一样罕见」。
+1. 从项目的 **Release** 页下载安装包（NSIS，`.exe`），双击安装。
+   安装时会自动把**预置词典与预置词频表**写入用户数据目录
+   （`%LOCALAPPDATA%\com.voctier.desktop\data\`），装完即可用，**不需要任何配置**。
+2. 打开应用，进入「划句」页：粘贴/输入一句话，自动分词，并按**主词频表**给每个词着色
+   （极多 → 极少 七档 + 灰色「未收录」）；点某个词可看频次、排名、前% 与占比。
+3. **全局取词**：在任意程序里选中一段文字，按 **`Alt+Q`**，弹出**悬浮小窗**显示该段的
+   词频着色（用的是剪贴板模拟法，见「已知限制」）。
 
-于是本工具用 jieba 负责**怎么切**，用你的语料库负责**数出多常见**。
+> 想自己打包/开发运行，见「故障排查」与 `tools/build-desktop.ps1`（不属于普通使用流程）。
 
----
+#### 2. 命令行（快速建表）
 
-## 二、快速开始
-
-### 1. 先跑命令行工具建立词频表
+> 用 Release 版桌面端时**一般不需要这步**——安装包已带预制词频表。仅当你没有现成词频表、
+> 想用自己的语料库重新建表时，才用命令行扫一份（或先 `scan` 好再到「表管理」导入）。
 
 ```powershell
 # 看看语料库都有哪些格式、多少数据
@@ -54,7 +54,7 @@ data/
 ├─ news/word.vfr          二进制索引，供 mmap 查询
 ├─ news/char.tsv/.vfr     该表组的字表
 ├─ wiki/ … blog/ …        其余表组
-├─ full/word.tsv/.vfr     全量（= 所有表组相加），**由 compose 产出**，见 §四
+├─ full/word.tsv/.vfr     全量（= 所有表组相加），**由 compose 产出**，见「自定义配置 → 表管理」
 ├─ 相加：财经/word.vfr     相加出来的新表，与上面完全平级
 └─ oov_candidates.tsv     词典外高频候选词，可喂给 --user-dict
 ```
@@ -71,7 +71,7 @@ data/
 >
 > ⚠ 老产物（`full/` + `domains/` 两棵树那种）现在**读不了**，会明确提示重新统计。
 
-### 2. 分析一句话
+分析一句话：
 
 ```powershell
 # 分词 + 频率信息 + 分组
@@ -98,124 +98,45 @@ vocfreq segment --data .\data --json "数字经济与人工智能深度融合"
 「前%」= 排名 ÷ 主词频表的条目数 × 100 —— 跨表可比，排名绝对值不可比
 （表组只有几万条、全量表有几百万条，同一句词在两张表里的名次差几十倍很正常）。
 
-### 3. 启动桌面端
-
-```powershell
-cd apps\desktop
-pnpm install
-pnpm tauri dev
-```
-
 ---
 
-## 三、命令行参考
+### 自定义配置
 
-```
-vocfreq detect   --corpus <DIR>                    # 只探测格式，不统计
-vocfreq scan     --corpus <DIR> --out <DIR> [选项]  # 统计，产出各表组的表（默认不含 full）
-vocfreq info     --table <FILE.vfr>                # 查看产物头信息与样例
-vocfreq lookup   --table <FILE.vfr> <词>…           # 查词频与排名
-vocfreq segment  --data <DIR> "<文本>"              # 分词 + 频率信息（含前%与各表对比）
-vocfreq oov      --data <DIR> [--scope news]        # 从已有产物重导词典外条目，无需重扫
-vocfreq curve    --data <DIR> --table news/word     # 覆盖率曲线，把覆盖率目标换算成排名阈值
-vocfreq pct      --data <DIR> --table full/word     # 前%上界 ↔ 排名阈值（默认口径的换算工具）
-vocfreq compose  --from-data <DIR> --source a/word --source b/word --scope 相加
-vocfreq merge    --from-data <DIR> --from-data <DIR> --scope 主表 --out <DIR>   # 把几份产物合流
-vocfreq prepare-seed --from-data <DIR> --dict <FILE> --out <DIR>   # 从产物摘出预置内容，供安装包携带
-```
+#### 1. 语料库格式
 
-表的指代一律是 **`表组/类型`**（`full/word`、`news/char`、`相加：财经/word`）；
-找不到表时命令会把这份产物里实际可用的表列出来，老写法 `domains/news/word` 因此会立刻
-得到一句能照着改的提示。`--no-domains` 表示"不要各表组的子表"；要和 `--full` 一起用，
-否则产物里一张表都没有。
+内置 4 条规则，自动探测（按顶层 key 匹配）：
 
-### 相加：把几张表加起来
+| 规则 | 顶层字段 | 文本字段 | 覆盖 |
+|---|---|---|---|
+| `mnbvc_paragraph` | `段落`（数组） | `内容` | blog / book / wiki / news / gov 的绝大多数，**含 warc/html 文件** |
+| `mnbvc_forum` | `回复`（数组） | `回复` + `主题` | forum，内容含 HTML 需清洗，且存在空对象元素 |
+| `plain_text` | — | `text` | gov/GovReport |
+| `parallel_subtitle` | — | `zh_text`，空则退 `cht_text` | parallel/subtitle |
 
-```powershell
-# 把 news 与 wiki 两个表组相加成一张新表（写在同一个产物目录里，和别的表完全平级）
-vocfreq compose --from-data .\data --source news/word --source wiki/word --scope "相加：新闻与维基"
+自定义规则（`--rules rules.json`）：
+
+```json
+[
+  { "name": "mnbvc_paragraph", "array_key": "段落", "text_key": "内容", "strip_html": false },
+  { "name": "my_format", "plain_key": "content", "alt_text_keys": ["body"], "strip_html": true }
+]
 ```
 
-相加在数学上是**精确**的：扫描本身就是"逐表组扫完再累加"，每个 token 只属于一个表组，
-所以各表组表相加**逐条等于**全量扫描出来的 `full`（有测试拿扫描产物的表组相加与
-`full` 逐条比对来钉这件事）。落地方式是**物化成真实 `.vfr`**，代价是一份表大小的磁盘，
-换来排行榜翻页与覆盖率曲线仍是 O(1) / 顺序读；源表不需要了可以删掉回收。
+#### 2. 词典
 
-源表**可以跨产物**（`--from-data` 可重复）：全量语料大到一块盘放不下、只能分几次扫时，
-就是这条路的用法。前提是各产物的**词典链与分词口径完全一致**，不一致会直接报错拒绝，
-不会静默合并 —— 频次是同一套切分规则下的计数，凑合加起来会得到一份自相矛盾的表。
+**词典必须显式指定。** 从词典外置那次改动起，jieba 的词典不再编进 exe 了 ——
+不指定就是直接报错，而不是悄悄用一份内置词典跑出一张口径不明的表。
+完整的目录模型见 [`docs/DATA_LAYOUT.md`](docs/DATA_LAYOUT.md)。
 
-在桌面端不用敲命令：「表管理」页勾几张表 → 起个名字 → 相加；加出来的表能直接设成主表，
-也能再被相加。
+词典格式只有三条规则：`词 词频 词性`（后两列可省）、以 `#` 开头的整行是注释、
+空行跳过。**词频省略**时按 jieba 的 `suggest_freq` 折算；把词频**显式写成 `0`**
+的词会被登记进词典却永远切不出来，两边都会出警告提醒。
 
-### 合流：把几份产物并成一份（按表组扫描的工作流）
+指定方式：`--dict` 指定主词典（可重复，第一份是主词典，其余依次叠加）、
+`--dict-dir` 取目录里所有 `.dict` 组成词典链（按文件名排序）、
+`--user-dict` 追加叠加词典（可重复，排在最后，其中的词标记成「来自用户词典」）。
 
-全量语料可能大到**一块盘放不下同时在场**（实测 140 GB）。这种时候只能一个表组一个表组地
-扫，最后把分几次扫出来的产物并起来：
-
-```powershell
-# 1) 一个表组一份产物 —— scan 默认不写 full，所以每份只有自己那个表组
-vocfreq scan --corpus D:\语料 --out D:\分片\A --dict 词典.dict --domains news
-vocfreq scan --corpus D:\语料 --out D:\分片\B --dict 词典.dict --domains wiki
-vocfreq scan --corpus D:\语料 --out D:\分片\C --dict 词典.dict --domains book
-
-# 2) 合流成一份标准产物（表组各自平级，谁也不动谁的频次）
-vocfreq merge --from-data D:\分片\A --from-data D:\分片\B --from-data D:\分片\C `
-              --scope 主表 --out D:\词频表
-
-# 3) 把各表组相加出 full
-vocfreq compose --from-data D:\词频表\主表 `
-                --source news/word --source wiki/word --source book/word `
-                --source news/char --source wiki/char --source book/char `
-                --scope full
-```
-
-`D:\词频表\主表\` 是一份**标准产物**，桌面端「表管理」直接就能打开，不需要任何改动。
-
-**合流的硬门槛是词典链与分词口径完全一致**：`merge` 逐份校验 `meta.json` 里的
-`tokenizer`（词典链逐份比 `sha256`，外加 `hmm` / `min_len` / `max_len` / `keep_latin` /
-`keep_digit` / `skip_single_char` / `engine` / `version`），任何一处不同都**报错拒绝**并
-指出是哪一份产物、哪个字段不同。没有指纹的老产物也拒绝 —— "两份都没有记录"看着一致，
-其实什么也没说明。它**不合并词典链、不挑一份当基准、不产出半截产物**（目标目录要么不
-存在，要么是完整的）。表组名跨产物撞车同样拒绝。
-
-需要一份显式的全量对照基准时，用一次 `--full` 的全量扫描：
-
-```powershell
-vocfreq scan --corpus D:\语料 --out D:\基准 --dict 词典.dict --full
-```
-
-完整说明（含"哪些字段不被当成门槛"）见 [`docs/DATA_LAYOUT.md`](docs/DATA_LAYOUT.md) §七。
-
-`scan` 的常用选项：
-
-| 选项 | 说明 |
-|---|---|
-| `--threads N` | 线程数，0 = 自动（默认） |
-| `--hmm` | 开启 HMM 新词发现。**默认关闭**，因为 HMM 会让同一实体在不同上下文被切成不同形态，拆散频次、使排行不可复现 |
-| `--dict FILE` | 指定词典（jieba 格式 `词 词频 词性`，词频与词性可省略）。**可重复，第一份是主词典**，其余依次叠加 |
-| `--dict-dir DIR` | 取目录里所有 `.dict` 组成词典链（按文件名排序），排在 `--dict` 之后 |
-| `--user-dict FILE` | 追加叠加词典（可重复），排在最后。其中的词会被标记成「来自用户词典」 |
-| `--domains a,b` | 只统计指定表组 |
-| `--no-domains` | 不产出表组子表（要和 `--full` 一起用，否则一张表都没有） |
-| `--full` | **顺带**产出全量表组 `full`。默认不产：它由「合流 + 相加」得到，见上面那节 |
-| `--min-count N` | 只保留出现 ≥ N 次的词条 |
-| `--keep-digit` | 保留纯数字 token（默认丢弃） |
-| `--no-latin` | 丢弃纯英文 token |
-| `--skip-single-char` | 单字不进词频表（单字另有字表承载） |
-| `--no-tsv` | 不写可读 TSV，只要二进制索引 |
-| `--oov-min-count N` | 词典外候选词的最小频次（默认 500） |
-| `--progress json` | 向 stderr 逐行输出 JSON 事件，供桌面端解析 |
-
-> ⚠ **词典必须显式指定。** 从词典外置那次改动起，jieba 的词典不再编进 exe 了 ——
-> 不指定就是直接报错，而不是悄悄用一份内置词典跑出一张口径不明的表。
-> 完整的目录模型见 [`docs/DATA_LAYOUT.md`](docs/DATA_LAYOUT.md)。
->
-> 词典格式只有三条规则：`词 词频 词性`（后两列可省）、以 `#` 开头的整行是注释、
-> 空行跳过。**词频省略**时按 jieba 的 `suggest_freq` 折算；把词频**显式写成 `0`**
-> 的词会被登记进词典却永远切不出来，两边都会出警告提醒。
-
-### 词典外的条目：实测能捞到什么
+**词典外的条目：实测能捞到什么**
 
 关闭 HMM 时，**jieba 只能输出「词典命中的词」或「未命中的单字」**。这条约束决定了
 「词典外候选」能提供什么，实测结果如下（全库词频表 380 万条）：
@@ -260,32 +181,29 @@ vocfreq oov --data .\data --min-count 100 --min-len 1          # 只看含汉字
 vocfreq oov --data .\data --min-count 200000 --no-cjk-only     # 看 URL/代码噪声，用来排查清洗规则
 ```
 
----
+#### 3. 扫描选项
 
-## 四、性能实测
+`scan` 的常用选项：
 
-本机：Ryzen 9 8945HX（16C/32T）+ 31 GB RAM + Samsung PM9A1 1 TB NVMe。
-
-| 项目 | 实测 |
+| 选项 | 说明 |
 |---|---|
-| 语料库 | 77 个 `.jsonl`，33.3 GB，5 种 JSON schema |
-| 磁盘纯顺序读 | 33.27 GB / **13.1 s**（2600 MB/s，两遍一致） |
-| **全量统计（含分词、计数、排行、落盘）** | 33.3 GB / **约 90 秒** |
-| 其中排行 380 万词 + 写 138 MB TSV + 91 MB 索引 | 约 3 秒 |
-| 单线程分词吞吐 | 46~93 MB/s（随文本难度变化） |
-| 32 线程分词吞吐（缓存命中） | 最高 1391 MB/s |
+| `--threads N` | 线程数，0 = 自动（默认） |
+| `--hmm` | 开启 HMM 新词发现。**默认关闭**，因为 HMM 会让同一实体在不同上下文被切成不同形态，拆散频次、使排行不可复现 |
+| `--dict FILE` | 指定词典（jieba 格式 `词 词频 词性`，词频与词性可省略）。**可重复，第一份是主词典**，其余依次叠加 |
+| `--dict-dir DIR` | 取目录里所有 `.dict` 组成词典链（按文件名排序），排在 `--dict` 之后 |
+| `--user-dict FILE` | 追加叠加词典（可重复），排在最后。其中的词会被标记成「来自用户词典」 |
+| `--domains a,b` | 只统计指定表组 |
+| `--no-domains` | 不产出表组子表（要和 `--full` 一起用，否则一张表都没有） |
+| `--full` | **顺带**产出全量表组 `full`。默认不产：它由「合流 + 相加」得到，见「表管理」 |
+| `--min-count N` | 只保留出现 ≥ N 次的词条 |
+| `--keep-digit` | 保留纯数字 token（默认丢弃） |
+| `--no-latin` | 丢弃纯英文 token |
+| `--skip-single-char` | 单字不进词频表（单字另有字表承载） |
+| `--no-tsv` | 不写可读 TSV，只要二进制索引 |
+| `--oov-min-count N` | 词典外候选词的最小频次（默认 500） |
+| `--progress json` | 向 stderr 逐行输出 JSON 事件，供桌面端解析 |
 
-几个实测结论已固化进代码，见 `docs/DESIGN.md` 第 0 节：
-
-1. **语料里有非法 UTF-8 的行**（爬取的维基数据）。用 `read_line` + `Err => break` 会让一行坏数据废掉整个区间（实测 4 线程有 2 个区间直接归零，丢掉 262 MB）。现在全程 `read_until(b'\n')` 按字节读行，坏行只跳过、绝不断流，并统计坏行数。
-2. **丢弃区间边界半行必须复用同一个 `BufReader`**。另建一个 reader 会在析构时带走内部已缓冲的约 8 KB，导致每个区间开头读到一行截断数据。
-3. **计数绝不能用互斥锁分片哈希表**：锁竞争让 32 线程比 16 线程更慢（501 → 434 MB/s）。改成每线程独占 + 末尾归并后为 848 MB/s 且单调扩展。
-4. **`Cow<'de, str>` 不是零拷贝**。serde 对 `Cow` 只有一条「先反序列化成 Owned 再包起来」的通用实现，永远分配。用它读 JSON 键等于每个键都造一个 `String`；换成自定义的 `KeyStr` 后 gov 表组快了 5 倍。
-5. **区块大小不是越小越好**：16 MB 区块（全库 2000+ 并发读流）比 64 MB 慢 60%。这台盘单流能跑 2600 MB/s，但扛不住几百个并发流。
-
----
-
-## 五、频率分组
+#### 4. 频率分组与阈值
 
 默认按**前%**分七组：`前% = 排名 ÷ 该表条目总数 × 100`，也就是「这个词排在前百分之几」。
 **词频表与字表的前%不同**：字表只有约 1.9 万个不重复字，套用词频表那套会让头几档只剩个位数的字。
@@ -337,31 +255,138 @@ vocfreq oov --data .\data --min-count 200000 --no-cjk-only     # 看 URL/代码�
 > 设置页里还能改用**绝对排名**、**累计覆盖率**或**词条数等分**三套口径（`tierMethod`），
 > 但默认与推荐都是前%。
 
----
+#### 5. 表管理：相加、合流与主表
 
-## 六、语料库格式
+谁当**主词频表**由你在应用里指定（默认 `full`，没有 `full` 时用排序后的第一个表组），
+所有表都能当主表，也都能互相相加。
 
-内置 4 条规则，自动探测（按顶层 key 匹配）：
+**相加：把几张表加起来**
 
-| 规则 | 顶层字段 | 文本字段 | 覆盖 |
-|---|---|---|---|
-| `mnbvc_paragraph` | `段落`（数组） | `内容` | blog / book / wiki / news / gov 的绝大多数，**含 warc/html 文件** |
-| `mnbvc_forum` | `回复`（数组） | `回复` + `主题` | forum，内容含 HTML 需清洗，且存在空对象元素 |
-| `plain_text` | — | `text` | gov/GovReport |
-| `parallel_subtitle` | — | `zh_text`，空则退 `cht_text` | parallel/subtitle |
-
-自定义规则（`--rules rules.json`）：
-
-```json
-[
-  { "name": "mnbvc_paragraph", "array_key": "段落", "text_key": "内容", "strip_html": false },
-  { "name": "my_format", "plain_key": "content", "alt_text_keys": ["body"], "strip_html": true }
-]
+```powershell
+# 把 news 与 wiki 两个表组相加成一张新表（写在同一个产物目录里，和别的表完全平级）
+vocfreq compose --from-data .\data --source news/word --source wiki/word --scope "相加：新闻与维基"
 ```
 
+相加在数学上是**精确**的：扫描本身就是"逐表组扫完再累加"，每个 token 只属于一个表组，
+所以各表组表相加**逐条等于**全量扫描出来的 `full`（有测试拿扫描产物的表组相加与
+`full` 逐条比对来钉这件事）。落地方式是**物化成真实 `.vfr`**，代价是一份表大小的磁盘，
+换来排行榜翻页与覆盖率曲线仍是 O(1) / 顺序读；源表不需要了可以删掉回收。
+
+源表**可以跨产物**（`--from-data` 可重复）：全量语料大到一块盘放不下、只能分几次扫时，
+就是这条路的用法。前提是各产物的**词典链与分词口径完全一致**，不一致会直接报错拒绝，
+不会静默合并 —— 频次是同一套切分规则下的计数，凑合加起来会得到一份自相矛盾的表。
+
+在桌面端不用敲命令：「表管理」页勾几张表 → 起个名字 → 相加；加出来的表能直接设成主表，
+也能再被相加。
+
+**合流：把几份产物并成一份（按表组扫描的工作流）**
+
+全量语料可能大到**一块盘放不下同时在场**（实测 140 GB）。这种时候只能一个表组一个表组地
+扫，最后把分几次扫出来的产物并起来：
+
+```powershell
+# 1) 一个表组一份产物 —— scan 默认不写 full，所以每份只有自己那个表组
+vocfreq scan --corpus D:\语料 --out D:\分片\A --dict 词典.dict --domains news
+vocfreq scan --corpus D:\语料 --out D:\分片\B --dict 词典.dict --domains wiki
+vocfreq scan --corpus D:\语料 --out D:\分片\C --dict 词典.dict --domains book
+
+# 2) 合流成一份标准产物（表组各自平级，谁也不动谁的频次）
+vocfreq merge --from-data D:\分片\A --from-data D:\分片\B --from-data D:\分片\C `
+              --scope 主表 --out D:\词频表
+
+# 3) 把各表组相加出 full
+vocfreq compose --from-data D:\词频表\主表 `
+                --source news/word --source wiki/word --source book/word `
+                --source news/char --source wiki/char --source book/char `
+                --scope full
+```
+
+`D:\词频表\主表\` 是一份**标准产物**，桌面端「表管理」直接就能打开，不需要任何改动。
+
+**合流的硬门槛是词典链与分词口径完全一致**：`merge` 逐份校验 `meta.json` 里的
+`tokenizer`（词典链逐份比 `sha256`，外加 `hmm` / `min_len` / `max_len` / `keep_latin` /
+`keep_digit` / `skip_single_char` / `engine` / `version`），任何一处不同都**报错拒绝**并
+指出是哪一份产物、哪个字段不同。没有指纹的老产物也拒绝 —— "两份都没有记录"看着一致，
+其实什么也没说明。它**不合并词典链、不挑一份当基准、不产出半截产物**（目标目录要么不
+存在，要么是完整的）。表组名跨产物撞车同样拒绝。
+
+需要一份显式的全量对照基准时，用一次 `--full` 的全量扫描：
+
+```powershell
+vocfreq scan --corpus D:\语料 --out D:\基准 --dict 词典.dict --full
+```
+
+完整说明（含"哪些字段不被当成门槛"）见 [`docs/DATA_LAYOUT.md`](docs/DATA_LAYOUT.md) §七。
+
 ---
 
-## 七、目录结构
+## 二、命令行参考
+
+```
+vocfreq detect   --corpus <DIR>                    # 只探测格式，不统计
+vocfreq scan     --corpus <DIR> --out <DIR> [选项]  # 统计，产出各表组的表（默认不含 full）
+vocfreq info     --table <FILE.vfr>                # 查看产物头信息与样例
+vocfreq lookup   --table <FILE.vfr> <词>…           # 查词频与排名
+vocfreq segment  --data <DIR> "<文本>"              # 分词 + 频率信息（含前%与各表对比）
+vocfreq oov      --data <DIR> [--scope news]        # 从已有产物重导词典外条目，无需重扫
+vocfreq curve    --data <DIR> --table news/word     # 覆盖率曲线，把覆盖率目标换算成排名阈值
+vocfreq pct      --data <DIR> --table full/word     # 前%上界 ↔ 排名阈值（默认口径的换算工具）
+vocfreq compose  --from-data <DIR> --source a/word --source b/word --scope 相加
+vocfreq merge    --from-data <DIR> --from-data <DIR> --scope 主表 --out <DIR>   # 把几份产物合流
+vocfreq prepare-seed --from-data <DIR> --dict <FILE> --out <DIR>   # 从产物摘出预置内容，供安装包携带
+```
+
+表的指代一律是 **`表组/类型`**（`full/word`、`news/char`、`相加：财经/word`）；
+找不到表时命令会把这份产物里实际可用的表列出来，老写法 `domains/news/word` 因此会立刻
+得到一句能照着改的提示。`--no-domains` 表示"不要各表组的子表"；要和 `--full` 一起用，
+否则产物里一张表都没有。
+
+`scan` 的完整选项见「自定义配置 → 扫描选项」，`compose` / `merge` 的用法见
+「自定义配置 → 表管理」。
+
+---
+
+## 三、为什么要自己统计，而不是用 jieba 自带的词频
+
+jieba 词典第三列确实是词频，但**它是分词用的概率权重，不是词频统计**。实测你手上这份 `dict.txt`（349,045 条 —— 注意长期在文档与代码里写的 349,046 是个**多算一条**的数字，它来自 jieba 内部 `count('\n') + 1` 的预留估算，不是真实条目数；`vocfreq` 现在报的是逐行解析出来的真实值）：
+
+| 现象 | 数据 |
+|---|---|
+| 权重恰好等于保底值 `3` 的条目 | **159,318 条（45.6%）** |
+| 权重等于 `2` 的条目 | 40,502 条 |
+| 两者合计 | **57.2%** |
+| 「的」的排名 | 第 **9** 位（318,825），低于「了」（883,634） |
+
+真实中文语料里「的」永远排第一。所以拿它判断稀有度，一半以上的词会显示成「一样罕见」。
+
+于是本工具用 jieba 负责**怎么切**，用你的语料库负责**数出多常见**。
+
+---
+
+## 四、性能实测
+
+本机：Ryzen 9 8945HX（16C/32T）+ 31 GB RAM + Samsung PM9A1 1 TB NVMe。
+
+| 项目 | 实测 |
+|---|---|
+| 语料库 | 77 个 `.jsonl`，33.3 GB，5 种 JSON schema |
+| 磁盘纯顺序读 | 33.27 GB / **13.1 s**（2600 MB/s，两遍一致） |
+| **全量统计（含分词、计数、排行、落盘）** | 33.3 GB / **约 90 秒** |
+| 其中排行 380 万词 + 写 138 MB TSV + 91 MB 索引 | 约 3 秒 |
+| 单线程分词吞吐 | 46~93 MB/s（随文本难度变化） |
+| 32 线程分词吞吐（缓存命中） | 最高 1391 MB/s |
+
+几个实测结论已固化进代码，见 `docs/DESIGN.md` 第 0 节：
+
+1. **语料里有非法 UTF-8 的行**（爬取的维基数据）。用 `read_line` + `Err => break` 会让一行坏数据废掉整个区间（实测 4 线程有 2 个区间直接归零，丢掉 262 MB）。现在全程 `read_until(b'\n')` 按字节读行，坏行只跳过、绝不断流，并统计坏行数。
+2. **丢弃区间边界半行必须复用同一个 `BufReader`**。另建一个 reader 会在析构时带走内部已缓冲的约 8 KB，导致每个区间开头读到一行截断数据。
+3. **计数绝不能用互斥锁分片哈希表**：锁竞争让 32 线程比 16 线程更慢（501 → 434 MB/s）。改成每线程独占 + 末尾归并后为 848 MB/s 且单调扩展。
+4. **`Cow<'de, str>` 不是零拷贝**。serde 对 `Cow` 只有一条「先反序列化成 Owned 再包起来」的通用实现，永远分配。用它读 JSON 键等于每个键都造一个 `String`；换成自定义的 `KeyStr` 后 gov 表组快了 5 倍。
+5. **区块大小不是越小越好**：16 MB 区块（全库 2000+ 并发读流）比 64 MB 慢 60%。这台盘单流能跑 2600 MB/s，但扛不住几百个并发流。
+
+---
+
+## 五、目录结构
 
 ```
 voctier/
@@ -386,12 +411,12 @@ voctier/
 
 ---
 
-## 八、已知限制
+## 六、已知限制
 
 - **全局取词用剪贴板模拟法**：暂存剪贴板 → 模拟 Ctrl+C → 读走选区 → 还原。因此
   - 若原剪贴板内容不是文本（图片、文件），无法完整还原；此时会**保留抓到的文本而不是清空剪贴板**；
   - 目标程序若以管理员身份运行而 VocTier 不是，Windows 的 UIPI 会阻止 Ctrl+C 送达，需要在设置里改用管理员启动。
-- **HMM 默认关闭**：词典外的新词会被切成碎片。回填 `--user-dict` 是解决办法（见第二节）。
+- **HMM 默认关闭**：词典外的新词会被切成碎片。回填 `--user-dict` 是解决办法（见「自定义配置 → 词典」）。
 - **新词发现（PMI + 左右邻字熵）尚未实现**，属于二期。它和「词典外词回填」是同一件事的两半。
 - **老产物（schema < 3）不能读**：从前是 `full/` + `domains/` 两棵树、把表组与类型糊在
   `full/word` 这样的路径里，现在每个表组各占一个平级目录。这种布局变化无法就地迁移，
@@ -409,13 +434,13 @@ voctier/
 - 绝对排名那套分带阈值仍然可用（设置里切 `tierMethod = rank`），但**默认是前%**：
   绝对阈值只在同一张表内有意义，换一张规模差很多的表（或换主表）就会失真。
 
-## 九、许可证
+## 七、许可证
 
 MIT。jieba-rs 与其词典同为 MIT。
 
 ---
 
-## 十、故障排查
+## 八、故障排查
 
 ### 桌面端白屏，并显示「无法访问此页面 / localhost 拒绝连接」
 
