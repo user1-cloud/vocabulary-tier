@@ -66,12 +66,25 @@ CI 全新 clone 拿不到。必须在本地出包：
 apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
 ```
 
-## 4. 上传并发布
+## 4. 上传并发布（一键）
+本地构建好后，用一条命令上传安装包并直接发布（替代手动拖拽上传 + 点 Publish）：
 
-1. 打开 GitHub → 仓库 → Releases，找到 `ci.yml` 自动建好的草稿 `VocTier v0.2.0`。
-2. 点 Edit，把 `*-setup.exe` 拖进 Assets 上传。
-3. 核对版本号、changelog，点 **Publish release**。
+```powershell
+# 上传现有 setup.exe 并直接发布（最快）
+.\tools\publish.ps1
 
+# 先打包再发布（等价于完整跑一遍 3 + 4）
+.\tools\publish.ps1 -Build
+
+# 上传后保留草稿，网页上再核一眼 changelog 再手动发布
+.\tools\publish.ps1 -Build -Draft
+
+# 只查看将发布的版本与安装包，不发布
+.\tools\publish.ps1 -Check
+```
+
+脚本会：读当前版本 → 定位 `nsis\*-setup.exe` → 复用 release.yml 建好的草稿（等不到就本地创建）→ `gh release upload` 上传 → 默认 `gh release edit --draft=false` 直接正式发布。
+首次使用需安装 GitHub 官方 CLI：`winget install GitHub.cli`，然后 `gh auth login`。
 发布即完成。用户从 Release 页下载安装包。
 
 ---
