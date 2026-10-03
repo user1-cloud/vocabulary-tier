@@ -224,7 +224,7 @@ apps/desktop/
 
 ## 8. 关于 `src-tauri/Cargo.toml` 的 `[workspace]`
 
-上层 `E:\...\voctier\Cargo.toml` 是一个 Cargo workspace，members 只有
+上层 `<仓库根>\Cargo.toml` 是一个 Cargo workspace，members 只有
 `crates/vocfreq-core` 和 `crates/vocfreq-cli`。
 
 Cargo 会**向上查找** workspace 根。如果不做处理，`apps/desktop/src-tauri` 会被
