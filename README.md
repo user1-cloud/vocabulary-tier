@@ -201,7 +201,7 @@ vocfreq oov --data .\data --min-count 200000 --no-cjk-only     # 看 URL/代码�
 | `--skip-single-char` | 单字不进词频表（单字另有字表承载） |
 | `--no-tsv` | 不写可读 TSV，只要二进制索引 |
 | `--oov-min-count N` | 词典外候选词的最小频次（默认 500） |
-| `--progress json` | 向 stderr 逐行输出 JSON 事件，供桌面端解析 |
+| `--progress json` | 向 stderr 逐行输出 JSON 事件（桌面端不解析它，直接复用 scan 回调，见 DESIGN.md） |
 
 #### 4. 频率分组与阈值
 

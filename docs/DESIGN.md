@@ -58,7 +58,9 @@ voctier/
    └─ src-tauri/              # 注意：用空 [workspace] 表与上层隔离
 ```
 
-`crates/vocfreq-cli` 可单独分发，是"纯 rust 工具"；Tauri 通过子进程调用它。
+`crates/vocfreq-cli` 可单独分发，是"纯 Rust 工具"，不依赖 Tauri。桌面端**并不通过子进程调用 CLI**：
+`apps/desktop/src-tauri` 以 crate 路径依赖（`vocfreq-core = { path = "../../../crates/vocfreq-core" }`）**直接复用同一个统计核心**，
+因此命令行工具与桌面端产出的结果与分词粒度必然一致（cli 侧负责交互，统计一律落在 core）。
 
 ## 2. 语料库 schema 与解析
 
@@ -487,7 +489,9 @@ vocfreq prepare-seed --from-data <DIR> --dict <FILE> --out <DIR>                
 `--scope 目标产物名`（不给 = `--out` 本身就是产物目录）。合流的硬门槛见
 `DATA_LAYOUT.md` §七：词典链与分词口径逐份校验，不一致就拒绝，且**绝不产出半截产物**。
 
-**进度上报**：`--progress json` 时向 **stderr** 逐行输出 JSON 事件，供 Tauri 子进程解析并驱动进度条：
+**进度上报**：CLI 用 `--progress json` 向 **stderr** 逐行输出 JSON 事件，供命令行场景把进度接给外部工具解析。
+桌面端**不解析这份 JSON** —— 它直接复用 core 的 `scan::scan` 回调拿到 `Progress`，在后台线程里统计，
+再把 `scan:progress` 事件推给前端驱动进度条（见 `apps/desktop/src-tauri/src/lib.rs`）：
 
 ```json
 {"event":"plan","files":77,"bytes":35740000000}
