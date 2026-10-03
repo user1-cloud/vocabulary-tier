@@ -357,12 +357,12 @@ export const en: Messages = {
   'sentences.input.scopeAll': 'Scope: full text',
   'sentences.input.analyzing': 'Analyzing…',
 
-  // 分域过滤
+  // 表组过滤
   'sentences.domains.title': 'Compare scopes',
   'sentences.domains.hint': 'Which scopes appear in the comparison column; none selected = all. Colouring only follows the primary table.',
   'sentences.domains.selectAll': 'Select all',
   'sentences.domains.entries': '{entries} entries',
-  /** 「清空」按钮在分域过滤与操作行各出现一次，同页同义，共用一条 */
+  /** 「清空」按钮在表组过滤与操作行各出现一次，同页同义，共用一条 */
   'sentences.clear': 'Clear',
 
   // 操作

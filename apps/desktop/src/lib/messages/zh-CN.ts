@@ -60,7 +60,7 @@ export const zhCN = {
     '管理数据文件夹里的词典（jieba 格式的 .dict）：导入、删除，并看清每一份的隐患。',
   'nav.tables.label': '表管理',
   'nav.tables.title': '表管理',
-  'nav.tables.description': '开关参与分域对比与排行榜的表，自定义七组分组阈值。',
+  'nav.tables.description': '开关参与表组对比与排行榜的表，自定义七组分组阈值。',
   'nav.settings.label': '设置',
   'nav.settings.title': '设置',
   'nav.settings.description': '分词参数、输出格式、主题与界面偏好。',
@@ -141,7 +141,7 @@ export const zhCN = {
   'settings.tokenize.keepLatinHint': '如 API、token',
   'settings.tokenize.skipSingleChar': '跳过单字词',
   'settings.tokenize.skipSingleCharHint': '只统计多字词（字表仍会产出）',
-  'settings.tokenize.domainTables': '默认产出分域表',
+  'settings.tokenize.domainTables': '默认产出表组',
   'settings.tokenize.domainTablesHint': '关闭后只产出全库词频表 / 字表，产物更小',
 
   // 默认目录与词典
@@ -198,22 +198,22 @@ export const zhCN = {
 
   // ① 语料库
   'wordfreq.step1.title': '① 选择语料库目录',
-  'wordfreq.step1.description': '填入或选择语料根目录，先「探测」识别分域、文件数与解析规则。',
+  'wordfreq.step1.description': '填入或选择语料根目录，先「探测」识别表组、文件数与解析规则。',
   'wordfreq.step1.corpusPlaceholder': '例如 D:\\corpus 或 /data/corpus',
   'wordfreq.step1.corpusLabel': '语料库目录',
   'wordfreq.step1.probe': '探测',
   'wordfreq.step1.probing': '探测中…',
   // 这三条句子里都有加粗的值，渲染处用 splitMessage 按占位符切分（见 i18n.svelte.ts）
-  'wordfreq.plan.domains': '识别到分域 {count} 个',
+  'wordfreq.plan.domains': '识别到表组 {count} 个',
   'wordfreq.plan.files': '文件 {count}',
   'wordfreq.plan.bytes': '体积 {value}',
   'wordfreq.plan.onlyThisDomain': '只统计 {domain}',
   /** `{field}` 是等宽显示的 ScanParams 字段名（不翻译） */
   'wordfreq.plan.ruleHint':
-    '勾选分域 = 只统计这几项（对应 {field}）；不勾选任何一项表示统计全部分域。',
+    '勾选表组 = 只统计这几项（对应 {field}）；不勾选任何一项表示统计全部表组。',
   'wordfreq.plan.noRule': '（未匹配到显式规则，按默认扩展名扫描）',
   'wordfreq.plan.col.include': '参与统计',
-  'wordfreq.plan.col.domain': '分域',
+  'wordfreq.plan.col.domain': '表组',
   // 「文件」「体积」两列复用上面的 stat 文案（同页同义，不重复登记）
   'wordfreq.plan.col.rules': '解析规则',
 
@@ -246,7 +246,7 @@ export const zhCN = {
   'wordfreq.step2.keepLatinHint': '如 API、token 作为独立词条',
   'wordfreq.step2.skipSingleChar': '跳过单字词',
   'wordfreq.step2.skipSingleCharHint': '只统计词频表中的多字词（字表仍单独产出）',
-  'wordfreq.step2.domainTables': '产出分域表',
+  'wordfreq.step2.domainTables': '产出表组',
   'wordfreq.step2.domainTablesHint': '关闭后只产出全库表，体积更小',
   'wordfreq.step2.writeTsv': '写出可读 TSV',
   'wordfreq.step2.writeTsvHint': '方便直接用 Excel / 文本编辑器查看',
@@ -296,11 +296,11 @@ export const zhCN = {
   'wordfreq.stat.paras': '段落',
   'wordfreq.stat.badLines': '跳过行',
   'wordfreq.progress.preparing': '准备中',
-  'wordfreq.progress.domain': '· 当前分域 {domain}',
+  'wordfreq.progress.domain': '· 当前表组 {domain}',
   'wordfreq.progress.bytes': '已处理 {done} / {total}',
   'wordfreq.progress.units': '单元 {done} / {total}',
   'wordfreq.planEvent.title': '扫描计划',
-  'wordfreq.planEvent.summary': '共 {files} 个文件 / {bytes}，分域：',
+  'wordfreq.planEvent.summary': '共 {files} 个文件 / {bytes}，表组：',
   'wordfreq.tables.title': '已写出的表',
   'wordfreq.tables.entries': '{entries} 词条 · {tokens} token',
   'wordfreq.tables.summary': '{entries} 词条 · {tokens} token · .vfr {bytes}',
@@ -365,12 +365,12 @@ export const zhCN = {
   'sentences.input.scopeAll': '分析范围：全文',
   'sentences.input.analyzing': '分析中…',
 
-  // 分域过滤
+  // 表组过滤
   'sentences.domains.title': '对比范围',
-  'sentences.domains.hint': '对比列里显示哪些作用域；不选 = 全显示。着色只看主表。',
+  'sentences.domains.hint': '对比列里显示哪些表组；不选 = 全显示。着色只看主表。',
   'sentences.domains.selectAll': '全选',
   'sentences.domains.entries': '{entries} 条',
-  /** 「清空」按钮在分域过滤与操作行各出现一次，同页同义，共用一条 */
+  /** 「清空」按钮在表组过滤与操作行各出现一次，同页同义，共用一条 */
   'sentences.clear': '清空',
 
   // 操作
@@ -385,7 +385,7 @@ export const zhCN = {
   'sentences.result.skipped': '标点/空白 {count}',
   'sentences.result.unknown': '未收录 {unique} 种 / {total} 次',
   'sentences.result.description':
-    '悬停任意词，右侧「词条详情」面板显示它的频次、排名、前 %、占比与分域排名；点击词条可钉住详情。',
+    '悬停任意词，右侧「词条详情」面板显示它的频次、排名、前 %、占比与表组排名；点击词条可钉住详情。',
   'sentences.result.thresholdHint':
     '词频表与字表的七组阈值都可以在「表管理」页自定义，这里按生效阈值着色。',
   'sentences.result.averageBaseline': '平均每 token 占比基准：词频表 {word} · 字表 {char}',
@@ -398,7 +398,7 @@ export const zhCN = {
   'sentences.detail.pinned': '已钉住',
   'sentences.detail.hint': '悬停查看 · 点击钉住',
   'sentences.detail.emptyHint':
-    '悬停左侧任意词条，这里会固定显示它的频次、排名、前 %、占比、分组与各分域排名。',
+    '悬停左侧任意词条，这里会固定显示它的频次、排名、前 %、占比、分组与各表组排名。',
   'sentences.detail.pinnedHint': '钉住后悬停别的词不会改变这里',
   'sentences.detail.unpin': '取消钉住',
 
@@ -524,20 +524,20 @@ export const zhCN = {
   'tables.notLoaded.p1NoError': '已找到 meta.json（{dir}），但 `open_dataset` 未成功。',
   'tables.notLoaded.p2': '表清单仍可管理，但 `tier_curve` 可能拿不到曲线。',
 
-  // A. 频率表清单（全部作用域，完全平级）
+  // A. 频率表清单（全部表组，完全平级）
   'tables.listTitle': '频率表',
   'tables.tableCountBadge': '{count} 张表',
-  'tables.scopeCountBadge': '{count} 个作用域',
-  'tables.primaryBadge': '主分域：{scope}',
-  'tables.primaryDomain.title': '主分域',
+  'tables.scopeCountBadge': '{count} 个表组',
+  'tables.primaryBadge': '主表组：{scope}',
+  'tables.primaryDomain.title': '主表组',
   'tables.primaryDomain.description':
-    '主分域决定"这个词有多常见"的唯一口径。一个分域 = 该域的词频表 + 字表，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余分域只做对比。',
+    '主表组决定"这个词有多常见"的唯一口径。一个表组 = 该表组的词频表 + 字表，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表组只做对比。',
   'tables.primaryDomain.scopeSummary': '词表 {word} 条 · 字表 {char} 条',
   'tables.primaryDescription':
-    '每个作用域各有一张词频表 + 一张字表，它们**完全平级**（`full` 只是"所有域加在一起"的那一个）。{emphasis}，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表只做对比。',
-  'tables.primaryEmphasis': '主分域决定"这个词有多常见"',
+    '每个表组各有一张词频表 + 一张字表，它们**完全平级**（`full` 只是"所有表组加在一起"的那一个）。{emphasis}，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表只做对比。',
+  'tables.primaryEmphasis': '主表组决定"这个词有多常见"',
   'tables.equalNote':
-    '表格里每张表都是同一份产物里的一个作用域，没有全库表与分域表的区别。想换一个"最常见"的基准就改主表；想把几个域合成一张新表就用下面的「相加」。',
+    '表格里每张表都是同一份产物里的一个表组，没有全库表与表组的区别。想换一个"最常见"的基准就改主表；想把几个表组合成一张新表就用下面的「相加」。',
   'tables.primarySet': '主词频表已切换为「{scope}」。',
   'tables.primaryFailed': '切换主表到「{scope}」失败：{error}',
   'tables.primaryAria': '把 {scope} 设为主词频表',
@@ -551,7 +551,7 @@ export const zhCN = {
   'tables.onlyWord': '只留词频表',
   'tables.onlyChar': '只留字表',
   'tables.resetAllEnabled': '重置为全部启用',
-  'tables.col.scope': '作用域',
+  'tables.col.scope': '表组',
   'tables.col.kind': '类型',
   'tables.col.entries': '词条数',
   'tables.col.tokens': '总 token',
@@ -562,24 +562,24 @@ export const zhCN = {
   'tables.sourceScanned': '扫描产出',
   'tables.sourceComposed': '相加（{count} 张）',
   'tables.countHint':
-    '提示：扫描时用了 `--skip-domain-tables` 或只统计了部分分域时，作用域会少一些。完整产物是「全量 + 每个一级子目录」各一张词频表 + 一张字表。',
+    '提示：扫描时用了 `--skip-domain-tables` 或只统计了部分表组时，表组会少一些。完整产物是「全量 + 每个一级子目录」各一张词频表 + 一张字表。',
 
   // B. 相加
   'tables.compose.title': '相加',
   'tables.compose.description':
-    '把若干张表加起来成一张新表（结果写在同一个产物目录里，作为另一个平级作用域）。相加是**精确**的：扫描本身就是逐作用域扫完再累加，所以各域表相加逐条等于全量扫描出来的那张表。',
+    '把若干张表加起来成一张新表（结果写在同一个产物目录里，作为另一个平级表组）。相加是**精确**的：扫描本身就是逐表组扫完再累加，所以各表组表相加逐条等于全量扫描出来的那张表。',
   'tables.compose.pickLabel': '要相加的表',
   'tables.compose.pickedBadge': '已选 {count} 张',
   'tables.compose.selectAll': '全选',
   'tables.compose.clearGroup': '清空本组',
-  'tables.compose.nameLabel': '新作用域名',
+  'tables.compose.nameLabel': '新表组名',
   'tables.compose.namePlaceholder': '例如：相加：新闻与维基',
   'tables.compose.defaultName': '相加',
   'tables.compose.run': '相加',
   'tables.compose.running': '相加中…',
   'tables.compose.needPick': '先勾选至少一张要相加的表。',
   'tables.compose.mixedKinds': '一次只能相加同一类（词频表或字表）。分两次相加即可。',
-  'tables.compose.done': '已相加出作用域「{scope}」：{kinds}，{entries} 条。',
+  'tables.compose.done': '已相加出表组「{scope}」：{kinds}，{entries} 条。',
   'tables.compose.doneShort': '已相加出「{scope}」',
   'tables.compose.note':
     '代价：磁盘上会多出一份表（大约等于一张扫描出来的表）。源表不需要了可以在上面的词频表管理里删掉回收空间；新表本身也可以再被相加。',
@@ -645,7 +645,7 @@ export const zhCN = {
   'tables.methodNote.topPct.what':
     '给七组定「前百分之几」的上界：前% = 排名 ÷ 该表条目总数 × 100。第 1 组 = 前 0.0026% 的词条，依此类推，第 7 组是剩下的全部。',
   'tables.methodNote.topPct.when':
-    '默认口径。它只跟"位次"有关、与表的规模无关，所以换一张表（分域表几万条、全量表几百万条）甚至换主表，色阶的含义都不变。排名绝对值做不到这一点：同一个阈值套在小表上会让整片词条挤进「极多」。',
+    '默认口径。它只跟"位次"有关、与表的规模无关，所以换一张表（表组几万条、全量表几百万条）甚至换主表，色阶的含义都不变。排名绝对值做不到这一点：同一个阈值套在小表上会让整片词条挤进「极多」。',
   'tables.methodNote.rank.what':
     '直接给七组定排名上界：第 1 组 = 排名 1..N₁，第 2 组 = N₁+1..N₂ …… 第 7 组 = 最后一个上界以上全部。',
   'tables.methodNote.rank.when':
@@ -735,11 +735,11 @@ export const zhCN = {
   // 控制区
   'leaderboard.title': '排行榜',
   'leaderboard.full': '全库',
-  'leaderboard.scope': '作用域',
+  'leaderboard.scope': '表组',
   'leaderboard.primaryScope': '主词频表（{scope}）',
   'leaderboard.primaryBadge': '主表',
   'leaderboard.summary': '{generated} 生成 · 当前表 {entries} 条目 · {tokens} token',
-  'leaderboard.domain': '域',
+  'leaderboard.domain': '表组',
   'leaderboard.searchPlaceholder': '按词首前缀搜索，例如「语」',
   'leaderboard.searchAria': '前缀搜索',
   'leaderboard.searching': '搜索中…',
@@ -854,8 +854,8 @@ export const zhCN = {
   'tokenDetail.notCollected':
     '语料库未收录：词频表 / 字表里都没有这个词条，因此没有频次、排名与分组（与「极少」不同，那一组是有排名的真实分组）。',
   'tokenDetail.rangeLine': '{group} · 生效排名上界 {range}',
-  // 铺平之后"各分域"其实就是"各张表"：同一个词在不同作用域里的排名对比。
-  // 一律显示前%，因为排名绝对值跨表不可比（分域表只有几万条、全量表有几百万条）。
+  // 铺平之后"各表组"其实就是"各张表"：同一个词在不同表组里的排名对比。
+  // 一律显示前%，因为排名绝对值跨表不可比（表组只有几万条、全量表有几百万条）。
   'tokenDetail.tableRanksTitle': '各表对比（前%）',
 
   // ---------------------------------------------------------------- 分组统计表（TierStatsTable）

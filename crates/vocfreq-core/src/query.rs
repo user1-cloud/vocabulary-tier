@@ -1,19 +1,19 @@
 //! `.vfr` 查询：mmap 打开、精确二分查词、按排名取条目。
 //!
-//! 还提供 [`Dataset`]：打开一个产物目录里的**全部**表（每个作用域各自一张词表 +
+//! 还提供 [`Dataset`]：打开一个产物目录里的**全部**表（每个表组各自一张词频表 +
 //! 一张字表），并对一句话做完整分析（分词 → 查频次 → 定分组 → 附各表排名）。
 //! 前端的划句分析直接调它，命令行 `segment` 也走同一条代码路径，因此两条链路的
 //! 行为必然一致。
 //!
-//! ## schema v3：作用域铺平
+//! ## schema v3：表组铺平
 //!
-//! 从前产物是「一张全库表 + N 张分域表」，全库表享有特权（"总体频率"只查它）。
-//! 现在**每个作用域都平等**：`full`（全量）只是其中一个，相加出来的新表也是同级
-//! 的一个作用域。谁负责回答"这个词有多常见"由用户指定的 **主作用域**决定
-//! （见 [`Dataset::primary_scope`]），其余作用域只做对比。
+//! 从前产物是「一张全库表 + N 张表组」，全库表享有特权（"总体频率"只查它）。
+//! 现在**每个表组都平等**：`full`（全量）只是其中一个，相加出来的新表也是同级
+//! 的一个表组。谁负责回答"这个词有多常见"由用户指定的 **主表组**决定
+//! （见 [`Dataset::primary_scope`]），其余表组只做对比。
 //!
 //! 读取端对**老布局（schema < 3）明确报错并让用户重扫**，不试图迁移：老产物把
-//! 作用域与类型糊在 `path` 里（`domains/news/word`），新读取端按"每个作用域一个
+//! 表组与类型糊在 `path` 里（`domains/news/word`），新读取端按"每个表组一个
 //! 目录"去找文件，硬读只会得到一句莫名其妙的「文件不存在」。
 
 use std::fs::File;
@@ -33,11 +33,11 @@ use crate::{Error, Result};
 pub const KIND_WORD: u32 = 0;
 pub const KIND_CHAR: u32 = 1;
 
-/// 单个 token 最多对多少个作用域做对比查询。
+/// 单个 token 最多对多少个表组做对比查询。
 ///
-/// 每一步都是一次二分查词（约 15 µs），作用域多了以后单句成本会线性上涨。
+/// 每一步都是一次二分查词（约 15 µs），表组多了以后单句成本会线性上涨。
 /// 划句分析的对象是句子不是文章，512 已经远超正常输入；超长输入（整篇文章粘进
-/// 小窗）直接不附对比信息，而不是让界面卡住 —— 着色与分组本来只看主作用域。
+/// 小窗）直接不附对比信息，而不是让界面卡住 —— 着色与分组本来只看主表组。
 const MAX_COMPARE_TOKENS: usize = 512;
 
 #[inline]
@@ -449,7 +449,7 @@ impl VfrTable {
 
     /// 把这张表**原样复制**到另一个路径（同 kind、同 flags 布局）。
     ///
-    /// 相加时用来搬运不需要合并的那一类表（例如只相加词表时，字表直接拷）。
+    /// 相加时用来搬运不需要合并的那一类表（例如只相加词频表时，字表直接拷）。
     /// 比"解码一遍再编码一遍"快得多，而且不会因为编解码往返引入任何差异。
     pub fn clone_into(&self, path: &Path) -> Result<u64> {
         std::fs::write(path, &self.mmap)?;
@@ -561,14 +561,14 @@ pub struct TokenInfo {
     pub tier_name: Option<String>,
     pub in_dict: Option<bool>,
     pub from_user: Option<bool>,
-    /// 各作用域（表）里的排名对比。作用域多时只填前 [`MAX_COMPARE_TOKENS`] 个 token。
+    /// 各表组（表）里的排名对比。表组多时只填前 [`MAX_COMPARE_TOKENS`] 个 token。
     pub table_ranks: Vec<TableRank>,
 }
 
 /// 某个 token 在某张表里的排名（划句分析里的「各表对比」一列）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TableRank {
-    /// 作用域：`full`、`news`、`相加：财经`…
+    /// 表组：`full`、`news`、`相加：财经`…
     pub scope: String,
     pub kind: String,
     /// 该表里的排名；`None` = 这张表没收录这个词
@@ -595,7 +595,7 @@ pub struct TableRef {
 }
 
 impl TableRef {
-    /// 表身份 `作用域/类型`。
+    /// 表身份 `表组/类型`。
     pub fn key(&self) -> String {
         table_key(&self.scope, &self.kind)
     }
@@ -610,9 +610,9 @@ impl TableRef {
 pub struct Dataset {
     pub root: PathBuf,
     pub meta: Meta,
-    /// 全部表（每个作用域各一张词表 + 一张字表），顺序与 `meta.tables` 一致
+    /// 全部表（每个表组各一张词频表 + 一张字表），顺序与 `meta.tables` 一致
     pub tables: Vec<TableRef>,
-    /// 主作用域：回答「这个词有多常见」的那一张（见 [`Self::primary_scope`]）
+    /// 主表组：回答「这个词有多常见」的那一张（见 [`Self::primary_scope`]）
     pub primary_scope: String,
 }
 
@@ -634,13 +634,13 @@ impl std::fmt::Debug for Dataset {
 impl Dataset {
     /// 打开输出目录（`vocfreq scan --out` / `vocfreq compose --out` 的产物目录）。
     ///
-    /// 主作用域默认 `full`；`full` 不存在时退到 `meta.scopes()` 的第一个。
-    /// 要指定别的主作用域用 [`Self::open_with_primary`]。
+    /// 主表组默认 `full`；`full` 不存在时退到 `meta.scopes()` 的第一个。
+    /// 要指定别的主表组用 [`Self::open_with_primary`]。
     pub fn open(root: &Path) -> Result<Self> {
         Self::open_with_primary(root, None)
     }
 
-    /// 同 [`Self::open`]，但显式指定主作用域。
+    /// 同 [`Self::open`]，但显式指定主表组。
     pub fn open_with_primary(root: &Path, primary: Option<&str>) -> Result<Self> {
         let meta_path = root.join("meta.json");
         let bytes = std::fs::read(&meta_path).map_err(|e| {
@@ -654,10 +654,10 @@ impl Dataset {
         if meta.schema_version < crate::artifact::SCHEMA_VERSION {
             return Err(Error::Format(format!(
                 "{} 是 schema v{} 的老产物（现在是 v{}）。\n\
-                 从 v3 起「全库表」与「分域表」被铺平成同级的**作用域**：\
-                 每个作用域一个目录（full/、news/…），老产物把作用域与类型糊在 \
+                 从 v3 起「全库表」与「表组」被铺平成同级的**表组**：\
+                 每个表组一个目录（full/、news/…），老产物把表组与类型糊在 \
                  `full/word`、`domains/news/word` 这样的路径里，读不了。\n\
-                 请用同一套语料库与词库重新统计一次（老产物的数据无法就地迁移）。",
+                 请用同一套语料库与词典重新统计一次（老产物的数据无法就地迁移）。",
                 meta_path.display(),
                 meta.schema_version,
                 crate::artifact::SCHEMA_VERSION
@@ -668,7 +668,7 @@ impl Dataset {
         for t in &meta.tables {
             if t.path.is_empty() || t.path.contains('/') || t.path.contains('\\') {
                 return Err(Error::Format(format!(
-                    "meta.json 里的表 {} 的作用域名非法（不允许包含路径分隔符）",
+                    "meta.json 里的表 {} 的表组名非法（不允许包含路径分隔符）",
                     t.path
                 )));
             }
@@ -676,7 +676,7 @@ impl Dataset {
             if !file.exists() {
                 // 半截产物（拷贝中断、被误删）要说清楚缺的是哪一张
                 return Err(Error::Format(format!(
-                    "{} 里记录的 {} 作用域 {} 表在磁盘上不存在：{}",
+                    "{} 里记录的 {} 表组 {} 表在磁盘上不存在：{}",
                     meta_path.display(),
                     t.path,
                     t.kind,
@@ -714,19 +714,19 @@ impl Dataset {
         })
     }
 
-    /// 全部**作用域** id（去重，`full` 优先）。
+    /// 全部**表组** id（去重，`full` 优先）。
     pub fn scopes(&self) -> Vec<String> {
         self.meta.scopes()
     }
 
-    /// 找一张表：`作用域 + 类型`。
+    /// 找一张表：`表组 + 类型`。
     pub fn table(&self, scope: &str, kind: &str) -> Option<&TableRef> {
         self.tables
             .iter()
             .find(|t| t.scope == scope && t.kind == kind)
     }
 
-    /// 按表身份（`作用域/类型`）找一张表。
+    /// 按表身份（`表组/类型`）找一张表。
     ///
     /// **全仓库唯一的解析点**：前端表管理器、`tier_curve` 命令、CLI 的 `curve`
     /// 都靠这个字符串指代表。
@@ -735,9 +735,9 @@ impl Dataset {
         self.table(&scope, &kind)
     }
 
-    /// 主作用域里这一类（词/字）的表。
+    /// 主表组里这一类（词/字）的表。
     ///
-    /// 主作用域缺这一类时（比如相加时只相加了词表）回落到 `full` 的同类，
+    /// 主表组缺这一类时（比如相加时只相加了词频表）回落到 `full` 的同类，
     /// 再回落到任意一张同类表 —— 宁可换个来源，也不能让整句变成「未收录」。
     pub fn primary_table(&self, kind: &str) -> Option<&TableRef> {
         self.table(&self.primary_scope, kind)
@@ -745,7 +745,7 @@ impl Dataset {
             .or_else(|| self.tables.iter().find(|t| t.kind == kind))
     }
 
-    /// 主作用域里某一类的分组阈值。
+    /// 主表组里某一类的分组阈值。
     fn tiers_of_primary(&self, kind: &str) -> Vec<crate::rank::Tier> {
         let key = self
             .primary_table(kind)
@@ -765,13 +765,13 @@ impl Dataset {
 
     /// 分析一句话：分词 → 查频次 → 定分组 → 附各表排名。
     ///
-    /// 单字 token 查主作用域的字表，其余查主作用域的词表；都查不到则 `tier = None`，
+    /// 单字 token 查主表组的字表，其余查主表组的词频表；都查不到则 `tier = None`，
     /// 界面应显示为「语料库未收录」，与「极少」区分开。
     pub fn analyze(&self, tk: &Tokenizer, text: &str) -> Vec<TokenInfo> {
         let segs = tk.segment(text);
         let word_tiers = self.tiers_of_primary("word");
         let char_tiers = self.tiers_of_primary("char");
-        // 主作用域的实际表（可能回落到 full）；阈值必须按**实际查到的那张表**取，
+        // 主表组的实际表（可能回落到 full）；阈值必须按**实际查到的那张表**取，
         // 否则"分组"是用 A 表的阈值去切 B 表的排名。
         let word_ref = self.primary_table("word");
         let char_ref = self.primary_table("char");
@@ -800,7 +800,7 @@ impl Dataset {
 
             if s.accepted {
                 let kind = if s.single_cjk { "char" } else { "word" };
-                // 单字查字表，其余查词表。字表不写 flags（记录里没有 flags 字节），
+                // 单字查字表，其余查词频表。字表不写 flags（记录里没有 flags 字节），
                 // 所以「是否在 jieba 词典内」必须直接问分词器，不能从字表记录里读，
                 // 否则每个单字都会被误标成「词典外」。
                 let (hit, tiers, tref) = if s.single_cjk {
@@ -1364,7 +1364,7 @@ mod tests {
             "full 必须排在最前"
         );
         assert_eq!(ds.primary_scope, "full");
-        assert_eq!(ds.tables.len(), 6, "3 个作用域 × 2 类");
+        assert_eq!(ds.tables.len(), 6, "3 个表组 × 2 类");
         // 表身份解析：唯一入口
         assert!(ds.table_by_key("news/word").is_some());
         assert!(ds.table_by_key("news/char").is_some());
@@ -1383,10 +1383,10 @@ mod tests {
         let ds = Dataset::open(&root).unwrap();
         assert_eq!(
             ds.primary_scope, "news",
-            "没有 full 时应取排序后的第一个作用域"
+            "没有 full 时应取排序后的第一个表组"
         );
-        // 显式指定一个不存在的作用域 → 也要回落，而不是留一个查不到表的主作用域
-        let ds2 = Dataset::open_with_primary(&root, Some("不存在的域")).unwrap();
+        // 显式指定一个不存在的表组 → 也要回落，而不是留一个查不到表的主表组
+        let ds2 = Dataset::open_with_primary(&root, Some("不存在的表组")).unwrap();
         assert_eq!(ds2.primary_scope, "news");
         // 指定存在的
         let ds3 = Dataset::open_with_primary(&root, Some("wiki")).unwrap();
@@ -1397,7 +1397,7 @@ mod tests {
 
     #[test]
     fn dataset_primary_falls_back_per_kind_when_scope_lacks_that_kind() {
-        // 只相加了词表的作用域：它的字表不存在，字表要回落到 full，
+        // 只相加了词频表的表组：它的字表不存在，字表要回落到 full，
         // 否则单字全变"未收录"，整句话都是灰的。
         let root = tmpdir("ds_kindfall");
         let mut meta = make_dataset(&root, &["full", "combo"], crate::artifact::SCHEMA_VERSION);
@@ -1446,8 +1446,8 @@ mod tests {
         let mut meta = make_dataset(&root, &["full"], crate::artifact::SCHEMA_VERSION);
         meta.tables[0].path = "full/word".into(); // 老写法的残留
         crate::artifact::write_meta(&root.join("meta.json"), &meta).unwrap();
-        let err = Dataset::open(&root).expect_err("作用域名里有分隔符必须报错");
-        assert!(err.to_string().contains("作用域名非法"), "{err}");
+        let err = Dataset::open(&root).expect_err("表组名里有分隔符必须报错");
+        assert!(err.to_string().contains("表组名非法"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1456,14 +1456,14 @@ mod tests {
         let root = tmpdir("ds_analyze");
         make_dataset(&root, &["full", "news"], crate::artifact::SCHEMA_VERSION);
         let ds = Dataset::open_with_primary(&root, Some("news")).unwrap();
-        // 分词器至少要有一份词库（`from_dicts` 对空链直接报错），所以落一份最小词库
+        // 分词器至少要有一份词典（`from_dicts` 对空链直接报错），所以落一份最小词典
         let dict_path = root.join("test.dict");
         std::fs::write(&dict_path, "中国 100 n\n人工智能 100 n\n").unwrap();
         let tk = crate::tokenize::Tokenizer::from_dict(
             &dict_path,
             crate::tokenize::TokenizeOpts::default(),
         )
-        .expect("落一份词库就该能建分词器");
+        .expect("落一份词典就该能建分词器");
         let infos = ds.analyze(&tk, "中国人工智能");
         assert!(!infos.is_empty());
         assert!(
@@ -1477,7 +1477,7 @@ mod tests {
                 assert!((top - rank as f64 * 100.0 / entries as f64).abs() < 1e-12);
                 assert!(top > 0.0, "前% 不能是 0（第 1 名也不行）");
             }
-            // 对比列必须覆盖全部作用域（同 kind），主表也在里面
+            // 对比列必须覆盖全部表组（同 kind），主表也在里面
             for r in &i.table_ranks {
                 assert_eq!(r.kind, i.table);
                 assert_eq!(

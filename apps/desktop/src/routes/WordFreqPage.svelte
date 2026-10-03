@@ -1,9 +1,20 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    step1: { id: 'step1', labelKey: 'wordfreq.step1.title' },
+    step2: { id: 'step2', labelKey: 'wordfreq.step2.title' },
+    step3: { id: 'step3', labelKey: 'wordfreq.step3.title' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
    * 生成词频表 —— 三步向导。
    *
-   *   ① 选语料库目录 → 「探测」调 plan_corpus，展示识别到的域 / 文件数 / 体积 / 解析规则
-   *   ② 配置参数（线程、HMM、数字词、单字、最小词频、分域表、TSV、自定义词典）
+   *   ① 选语料库目录 → 「探测」调 plan_corpus，展示识别到的表组 / 文件数 / 体积 / 解析规则
+   *   ② 配置参数（线程、HMM、数字词、单字、最小词频、表组、TSV、自定义词典）
    *   ③ 选输出目录 → 「开始统计」调 start_scan，订阅 scan:progress 显示进度与日志
    *
    * 所有 Tauri 调用都走 $lib/api/bridge（页面不直接 import @tauri-apps/api）。
@@ -19,6 +30,7 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import Input from '$lib/components/ui/input/Input.svelte';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import { Separator } from '$lib/components/ui/separator';
   import { Switch } from '$lib/components/ui/switch';
   import TierStatsTable from '$lib/components/analysis/TierStatsTable.svelte';
@@ -103,7 +115,7 @@
    */
   let activeMeta = $state<Meta | null>(null);
 
-  /** 只统计部分分域（空数组 = 全部） */
+  /** 只统计部分表组（空数组 = 全部） */
   let onlyDomains = $state<string[]>([]);
 
   let plan = $state<CorpusPlan | null>(null);
@@ -438,7 +450,7 @@
     }
     plan = res.data;
     form.corpus = res.data.corpus || target;
-    // 域列表变了，把已选但已不存在的域清掉
+    // 表组列表变了，把已选但已不存在的表组清掉
     const names = new Set(res.data.domains.map((d) => d.name));
     onlyDomains = onlyDomains.filter((name) => names.has(name));
   }
@@ -609,15 +621,8 @@
   </div>
 
   <!-- ① 语料库 -->
-  <Card data-section="step1">
-    <CardHeader>
-      <div class="flex items-center gap-2">
-        <CardTitle>{t('wordfreq.step1.title')}</CardTitle>
-        <Badge variant="outline">plan_corpus</Badge>
-      </div>
-      <CardDescription>{t('wordfreq.step1.description')}</CardDescription>
-    </CardHeader>
-    <CardContent class="flex flex-col gap-3">
+  <SectionCard section={PAGE_SECTIONS.step1} descriptionKey="wordfreq.step1.description">
+    {#snippet titleExtra()}<Badge variant="outline">plan_corpus</Badge>{/snippet}
       <div class="flex flex-wrap items-center gap-2">
         <Input
           bind:value={form.corpus}
@@ -699,19 +704,11 @@
           {segRuleHint[0]}<span class="font-mono">onlyDomains</span>{segRuleHint[1]}
         </p>
       {/if}
-    </CardContent>
-  </Card>
+  </SectionCard>
 
   <!-- ② 参数 -->
-  <Card data-section="step2">
-    <CardHeader>
-      <div class="flex items-center gap-2">
-        <CardTitle>{t('wordfreq.step2.title')}</CardTitle>
-        <Badge variant="outline">ScanParams</Badge>
-      </div>
-      <CardDescription>{t('wordfreq.step2.description')}</CardDescription>
-    </CardHeader>
-    <CardContent class="flex flex-col gap-4">
+  <SectionCard section={PAGE_SECTIONS.step2} descriptionKey="wordfreq.step2.description" contentClass="flex flex-col gap-4">
+    {#snippet titleExtra()}<Badge variant="outline">ScanParams</Badge>{/snippet}
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label class="flex flex-col gap-1.5">
           <span class="text-xs font-medium">{t('wordfreq.step2.threads')}</span>
@@ -872,19 +869,11 @@
           <Switch bind:checked={form.writeTsv} aria-label={t('wordfreq.step2.writeTsvAria')} />
         </div>
       </div>
-    </CardContent>
-  </Card>
+  </SectionCard>
 
   <!-- ③ 输出与执行 -->
-  <Card data-section="step3">
-    <CardHeader>
-      <div class="flex items-center gap-2">
-        <CardTitle>{t('wordfreq.step3.title')}</CardTitle>
-        <Badge variant="outline">start_scan</Badge>
-      </div>
-      <CardDescription>{t('wordfreq.step3.description')}</CardDescription>
-    </CardHeader>
-    <CardContent class="flex flex-col gap-3">
+  <SectionCard section={PAGE_SECTIONS.step3} descriptionKey="wordfreq.step3.description">
+    {#snippet titleExtra()}<Badge variant="outline">start_scan</Badge>{/snippet}
       <!-- 表名：只用来算默认输出目录（`suggest_table_dir`），不进 ScanParams -->
       <div class="flex flex-wrap items-center gap-2">
         <label class="flex min-w-56 flex-1 flex-col gap-1.5">
@@ -1059,8 +1048,7 @@
           </div>
         </div>
       {/if}
-    </CardContent>
-  </Card>
+  </SectionCard>
 
   <!-- 结果 -->
   {#if result}

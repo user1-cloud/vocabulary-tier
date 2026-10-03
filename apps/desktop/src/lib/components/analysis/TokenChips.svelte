@@ -74,7 +74,7 @@ function isWhitespace(text: string): boolean {
 function tierIndexOf(token: TokenInfo): number | null {
   if (token.accepted && meta && settings) {
     const kind = token.single_cjk ? 'char' : 'word';
-    // 阈值取**主作用域**那一张：铺平之后用户可以把任意作用域设为主表，
+    // 阈值取**主表组**那一张：铺平之后用户可以把任意表组设为主表，
     // 写死 `full/word` 会让颜色与详情面板里的前%对不上。
     const index = tierIndexFor(
       kind,

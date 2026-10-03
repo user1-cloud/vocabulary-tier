@@ -1,8 +1,18 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    control: { id: 'control', labelKey: 'leaderboard.title' },
+    ranklist: { id: 'ranklist', labelKey: 'leaderboard.rankListTitle' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
-   * 排行榜 —— 全库 / 各分域的排名浏览。
+   * 排行榜 —— 全库 / 各表组的排名浏览。
    *
-   *   - 域切换（全库 + 各分域）、词频表 / 字表切换
+   *   - 表组切换（全库 + 各表组）、词频表 / 字表切换
    *   - 分页（每页 100，用 list_rank 的 from/limit，from 从 1 开始）
    *   - 前缀搜索（search_words）
    *   - 七组筛选（对当前已加载页做客户端过滤，界面上明确说明）
@@ -20,6 +30,7 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import Input from '$lib/components/ui/input/Input.svelte';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import { Separator } from '$lib/components/ui/separator';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
   import {
@@ -67,7 +78,7 @@
   type Kind = 'word' | 'char';
 
   let kind = $state<Kind>('word');
-  /** null = **主作用域**（用户指定的那张表），不是硬编码的 full */
+  /** null = **主表组**（用户指定的那张表），不是硬编码的 full */
   let domain = $state<string | null>(null);
   let page = $state(1);
 
@@ -116,10 +127,10 @@
   const dark = $derived(isDark());
 
   /**
-   * 当前作用域 + 表种对应的表元数据（用于条目数、total_tokens、分页与分组阈值）。
+   * 当前表组 + 表种对应的表元数据（用于条目数、total_tokens、分页与分组阈值）。
    *
-   * `domain === null` = **主作用域**（用户指定的那张），不是硬编码的 `full`：
-   * 铺平之后任意作用域都能当主表，排行榜必须跟着它走，否则同一页里"主表"标签
+   * `domain === null` = **主表组**（用户指定的那张），不是硬编码的 `full`：
+   * 铺平之后任意表组都能当主表，排行榜必须跟着它走，否则同一页里"主表"标签
    * 与看到的排名是两张不同的表。
    */
   const currentTable = $derived.by(() => {
@@ -178,7 +189,7 @@
     void bootstrap();
   });
 
-  // 域 / 表种 / 页码变化时重新拉取
+  // 表组 / 表种 / 页码变化时重新拉取
   $effect(() => {
     const nextDomain = domain;
     const nextKind = kind;
@@ -437,27 +448,23 @@
     </Card>
   {:else}
     <!-- 控制区 -->
-    <Card data-section="control">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('leaderboard.title')}</CardTitle>
-          <Badge variant="secondary">{kind === 'word' ? t('table.word') : t('table.char')}</Badge>
-          <Badge variant="outline">{domain ?? primaryScope(meta)}</Badge>
-          {#if domain === null}
-            <!-- 主作用域是全局设置，这里明确标出来，免得用户以为排行榜看的是 full -->
-            <Badge variant="secondary">{t('leaderboard.primaryBadge')}</Badge>
-          {/if}
-        </div>
-        <CardDescription>
-          {t('leaderboard.summary', {
-            generated: formatTimestamp(meta?.generated_at),
-            entries: formatInt(totalEntries),
-            tokens: formatInt(totalTokens),
-          })}
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
-        <!-- 作用域切换：铺平之后每个作用域都是一张平等的表 -->
+    <SectionCard section={PAGE_SECTIONS.control}>
+      {#snippet titleExtra()}
+        <Badge variant="secondary">{kind === 'word' ? t('table.word') : t('table.char')}</Badge>
+        <Badge variant="outline">{domain ?? primaryScope(meta)}</Badge>
+        {#if domain === null}
+          <!-- 主表组是全局设置，这里明确标出来，免得用户以为排行榜看的是 full -->
+          <Badge variant="secondary">{t('leaderboard.primaryBadge')}</Badge>
+        {/if}
+      {/snippet}
+      {#snippet description()}
+        {t('leaderboard.summary', {
+          generated: formatTimestamp(meta?.generated_at),
+          entries: formatInt(totalEntries),
+          tokens: formatInt(totalTokens),
+        })}
+      {/snippet}
+        <!-- 表组切换：铺平之后每个表组都是一张平等的表 -->
         <div class="flex flex-wrap items-center gap-1.5">
           <span class="mr-1 text-xs font-medium">{t('leaderboard.scope')}</span>
           <button
@@ -586,25 +593,19 @@
             {searchError}
           </p>
         {/if}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 表格 -->
-    <Card data-section="ranklist">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('leaderboard.rankListTitle')}</CardTitle>
-          <Badge variant="outline">{rangeLabel}</Badge>
-          {#if activeTiers.length > 0}
-            <Badge variant="secondary"
-              >{t('leaderboard.filteredCount', { count: formatInt(filteredRows.length) })}</Badge
-            >
-          {/if}
-          {#if loading}<Badge variant="outline">{t('leaderboard.loading')}</Badge>{/if}
-        </div>
-        <CardDescription>{t('leaderboard.rowHint')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard section={PAGE_SECTIONS.ranklist} descriptionKey="leaderboard.rowHint">
+      {#snippet titleExtra()}
+        <Badge variant="outline">{rangeLabel}</Badge>
+        {#if activeTiers.length > 0}
+          <Badge variant="secondary"
+            >{t('leaderboard.filteredCount', { count: formatInt(filteredRows.length) })}</Badge
+          >
+        {/if}
+        {#if loading}<Badge variant="outline">{t('leaderboard.loading')}</Badge>{/if}
+      {/snippet}
         <div class="scrollbar-thin max-h-[32rem] overflow-auto rounded-lg border border-border">
           <table class="w-full border-collapse text-xs">
             <thead class="sticky top-0 z-10 bg-surface-muted text-muted-foreground">
@@ -752,8 +753,7 @@
             >
           </div>
         {/if}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!-- 查词详情 -->
     {#if detailOpen}

@@ -1,3 +1,14 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    dataset: { id: 'dataset', labelKey: 'sentences.dataset.title' },
+    input: { id: 'input', labelKey: 'sentences.input.title' },
+    result: { id: 'result', labelKey: 'sentences.result.title' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
    * 划句分析 —— 核心页面。
@@ -11,7 +22,7 @@
    * 固定面板永远在窗口内，内容长了自己滚。布局样式见文件末尾。
    *
    * **着色与分组只看主词频表**（设置里的 `primaryScope`）；这里的「对比范围」勾的是
-   * 对比列里显示哪些**作用域**，空数组 = 全显示（后端 `domains` 参数沿用旧名）。
+   * 对比列里显示哪些**表组**，空数组 = 全显示（后端 `domains` 参数沿用旧名）。
    */
   import { Badge } from '$lib/components/ui/badge';
   import { Button } from '$lib/components/ui/button';
@@ -23,6 +34,7 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import { Separator } from '$lib/components/ui/separator';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import TokenChips from '$lib/components/analysis/TokenChips.svelte';
   import TokenDetail from '$lib/components/analysis/TokenDetail.svelte';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
@@ -85,7 +97,7 @@
   /** 后端当前打开的那张表的产物目录（只用于展示，`analyze_text` 不再需要它） */
   let activeDir = $state<string | null>(null);
 
-  /** 对比列里保留哪些**作用域**（空数组 = 全部；着色只看主表） */
+  /** 对比列里保留哪些**表组**（空数组 = 全部；着色只看主表） */
   let compareScopes = $state<string[]>([]);
 
   /**
@@ -159,7 +171,7 @@
   function tierIndexOfToken(token: TokenInfo): number | null {
     if (!meta) return token.tier;
     const kind = token.single_cjk || token.table === 'char' ? 'char' : 'word';
-    // 阈值取自**主作用域**那张表：铺平之后它可能是 news 或某张相加表，
+    // 阈值取自**主表组**那张表：铺平之后它可能是 news 或某张相加表，
     // 写死 full/word 会让这里的颜色与详情面板里的前%对不上。
     const key = primaryTableKey(meta, kind);
     const index = activeTierIndex(kind, token.rank, meta, key);
@@ -194,7 +206,7 @@
     }
     activeMeta = res.data;
     // 后端按记录的词典链重建分词器是在激活表时做的，这里只取 meta；
-    // 分域默认查全部（空数组），与后端约定一致。
+    // 表组默认查全部（空数组），与后端约定一致。
     compareScopes = [];
     // 顺带记下产物目录（只用于页面展示）
     const infoRes = await libraryInfo();
@@ -270,7 +282,7 @@
       : compareScopes.filter((item) => item !== name);
   }
 
-  /** 全部**作用域**（表侧）：对比列里可选的那些 */
+  /** 全部**表组**（表侧）：对比列里可选的那些 */
   const allScopes = $derived(metaScopes(meta));
 
   function selectAllScopes() {
@@ -448,41 +460,37 @@
     </Card>
   {:else}
     <!-- 数据集概览 -->
-    <Card data-section="dataset">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('sentences.dataset.title')}</CardTitle>
-          <Badge variant="success">{t('sentences.dataset.ready')}</Badge>
-          <Badge variant="secondary">schema v{meta?.schema_version}</Badge>
-          {#if meta?.tokenizer}
-            <Badge variant="outline">{meta.tokenizer.engine} {meta.tokenizer.version}</Badge>
+    <SectionCard section={PAGE_SECTIONS.dataset}>
+      {#snippet titleExtra()}
+        <Badge variant="success">{t('sentences.dataset.ready')}</Badge>
+        <Badge variant="secondary">schema v{meta?.schema_version}</Badge>
+        {#if meta?.tokenizer}
+          <Badge variant="outline">{meta.tokenizer.engine} {meta.tokenizer.version}</Badge>
+          <Badge variant="outline">
+            {t('sentences.dataset.hmm', {
+              value: meta.tokenizer.hmm ? t('common.on') : t('common.off'),
+            })}
+          </Badge>
+          {#if resolvedDicts(meta.tokenizer).length > 0}
             <Badge variant="outline">
-              {t('sentences.dataset.hmm', {
-                value: meta.tokenizer.hmm ? t('common.on') : t('common.off'),
+              {t('sentences.dataset.dictChain', {
+                count: resolvedDicts(meta.tokenizer).length,
+                names: resolvedDicts(meta.tokenizer)
+                  .map((ref) => ref.name || ref.id)
+                  .join(t('common.listSeparator')),
               })}
             </Badge>
-            {#if resolvedDicts(meta.tokenizer).length > 0}
-              <Badge variant="outline">
-                {t('sentences.dataset.dictChain', {
-                  count: resolvedDicts(meta.tokenizer).length,
-                  names: resolvedDicts(meta.tokenizer)
-                    .map((ref) => ref.name || ref.id)
-                    .join(t('common.listSeparator')),
-                })}
-              </Badge>
-            {/if}
           {/if}
-        </div>
-        <CardDescription>
-          {t('sentences.dataset.summary', {
-            generated: formatTimestamp(meta?.generated_at),
-            tokens: formatInt(meta?.totals.tokens),
-            wordTable: tableSummaryLabel('word'),
-            charTable: tableSummaryLabel('char'),
-          })}
-        </CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+        {/if}
+      {/snippet}
+      {#snippet description()}
+        {t('sentences.dataset.summary', {
+          generated: formatTimestamp(meta?.generated_at),
+          tokens: formatInt(meta?.totals.tokens),
+          wordTable: tableSummaryLabel('word'),
+          charTable: tableSummaryLabel('char'),
+        })}
+      {/snippet}
         <p class="selectable truncate font-mono text-[11px] text-muted-foreground">{activeDir ?? meta?.corpus_root}</p>
         <TierLegend names={legendNames} keys={legendKeys} bounds={wordBounds} />
         {#if wordBoundsWarning || charBoundsWarning}
@@ -491,8 +499,7 @@
             {t(boundsWarning.key, boundsWarning.params)}
           </p>
         {/if}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     <!--
       两栏布局：左侧 = 输入框 + 着色 token 展示；右侧 = 固定宽度的「词条详情」面板。
@@ -502,40 +509,33 @@
     <div class="analysis-layout">
       <div class="analysis-main">
         <!-- 输入区 -->
-        <Card data-section="input">
-          <CardHeader>
-            <div class="flex flex-wrap items-center gap-2">
-              <CardTitle>{t('sentences.input.title')}</CardTitle>
-              <div class="ml-auto flex items-center gap-1 rounded-md border border-border p-0.5">
-                <button
-                  type="button"
-                  aria-pressed={mode === 'all'}
-                  class={cn(
-                    'rounded px-2.5 py-1 text-xs transition-colors',
-                    mode === 'all' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
-                  )}
-                  onclick={() => setMode('all')}
-                >
-                  {t('sentences.input.modeAll')}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={mode === 'selection'}
-                  class={cn(
-                    'rounded px-2.5 py-1 text-xs transition-colors',
-                    mode === 'selection' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
-                  )}
-                  onclick={() => setMode('selection')}
-                >
-                  {t('sentences.input.modeSelection')}
-                </button>
-              </div>
+        <SectionCard section={PAGE_SECTIONS.input} descriptionKey="sentences.input.description">
+          {#snippet titleExtra()}
+            <div class="ml-auto flex items-center gap-1 rounded-md border border-border p-0.5">
+              <button
+                type="button"
+                aria-pressed={mode === 'all'}
+                class={cn(
+                  'rounded px-2.5 py-1 text-xs transition-colors',
+                  mode === 'all' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
+                )}
+                onclick={() => setMode('all')}
+              >
+                {t('sentences.input.modeAll')}
+              </button>
+              <button
+                type="button"
+                aria-pressed={mode === 'selection'}
+                class={cn(
+                  'rounded px-2.5 py-1 text-xs transition-colors',
+                  mode === 'selection' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
+                )}
+                onclick={() => setMode('selection')}
+              >
+                {t('sentences.input.modeSelection')}
+              </button>
             </div>
-            <CardDescription>
-              {t('sentences.input.description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent class="flex flex-col gap-3">
+          {/snippet}
             <textarea
               bind:this={textarea}
               bind:value={text}
@@ -574,7 +574,7 @@
               {#if analyzing}<span>{t('sentences.input.analyzing')}</span>{/if}
             </div>
 
-            <!-- 分域过滤 -->
+            <!-- 表组过滤 -->
             <div class="flex flex-col gap-2 rounded-lg border border-border p-3">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-xs font-medium">{t('sentences.domains.title')}</span>
@@ -628,38 +628,33 @@
               </Button>
               <Button variant="ghost" size="sm" onclick={clearAll}>{t('sentences.clear')}</Button>
             </div>
-          </CardContent>
-        </Card>
+  </SectionCard>
 
         <!-- 分析结果 -->
-        <Card data-section="result">
-          <CardHeader>
-            <div class="flex flex-wrap items-center gap-2">
-              <CardTitle>{t('sentences.result.title')}</CardTitle>
+        <SectionCard section={PAGE_SECTIONS.result}>
+          {#snippet titleExtra()}
+            <Badge variant="outline">
+              {t('sentences.result.tokenCount', { count: formatInt(tokens.length) })}
+            </Badge>
+            <Badge variant="secondary">
+              {t('sentences.result.accepted', { count: formatInt(summary.accepted) })}
+            </Badge>
+            <Badge variant="outline">
+              {t('sentences.result.skipped', { count: formatInt(summary.skipped) })}
+            </Badge>
+            {#if summary.unknownTotal > 0}
               <Badge variant="outline">
-                {t('sentences.result.tokenCount', { count: formatInt(tokens.length) })}
+                {t('sentences.result.unknown', {
+                  unique: formatInt(summary.unknownUnique),
+                  total: formatInt(summary.unknownTotal),
+                })}
               </Badge>
-              <Badge variant="secondary">
-                {t('sentences.result.accepted', { count: formatInt(summary.accepted) })}
-              </Badge>
-              <Badge variant="outline">
-                {t('sentences.result.skipped', { count: formatInt(summary.skipped) })}
-              </Badge>
-              {#if summary.unknownTotal > 0}
-                <Badge variant="outline">
-                  {t('sentences.result.unknown', {
-                    unique: formatInt(summary.unknownUnique),
-                    total: formatInt(summary.unknownTotal),
-                  })}
-                </Badge>
-              {/if}
-            </div>
-            <CardDescription>
-              {t('sentences.result.description')}
-              <span class="ml-1">{t('sentences.result.thresholdHint')}</span>
-            </CardDescription>
-          </CardHeader>
-          <CardContent class="flex flex-col gap-3">
+            {/if}
+          {/snippet}
+          {#snippet description()}
+            {t('sentences.result.description')}
+            <span class="ml-1">{t('sentences.result.thresholdHint')}</span>
+          {/snippet}
             {#if analyzeError}
               <p class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {analyzeError}
@@ -711,8 +706,7 @@
                 })}
               </p>
             {/if}
-          </CardContent>
-        </Card>
+  </SectionCard>
       </div>
 
       <!-- 固定位置的「词条详情」面板：宽屏时吸在右侧并独立滚动，永远不会被窗口裁掉 -->
@@ -785,7 +779,7 @@
   /*
     详情面板正文必须有**固定高度**，不能只给 max-height。
     原因（实测，1440×900）：TokenDetail 的骨架（词头 + 四格 + 徽标行）恒定 108px，
-    但它下面的「各分域排名 / 未收录说明 / 阈值回退」长度随 token 变化 ——
+    但它下面的「各表组排名 / 未收录说明 / 阈值回退」长度随 token 变化 ——
     标点几乎为空、未收录最长。高度自适应内容时整个面板会跟着内容变长变短：
       面板总高：标点 171 / 多字词 261 / 未收录 325  →  用户看到的「标点时很小、
       词汇时突然变大」就是它。

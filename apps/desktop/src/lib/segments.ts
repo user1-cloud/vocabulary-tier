@@ -118,7 +118,7 @@ export function summarizeTokens(
   };
 }
 
-/** 分域排名的展示串：`综合 #123 · 文学 未收录` */
+/** 表组排名的展示串：`综合 #123 · 文学 未收录` */
 export function formatDomainRanks(domainRanks: [string, number | null][]): string {
   if (domainRanks.length === 0) return '—';
   return domainRanks

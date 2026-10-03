@@ -8,7 +8,7 @@ VocTier 中文字词频率分析工具的桌面客户端前端。
 - **壳**：Tauri v2（`src-tauri/`，一个**独立于上层 Cargo workspace** 的 Rust 工程）
 - **界面语言**：中文（i18n 内核已就绪，`zh-CN` 为源语言）
 
-> 当前状态：**业务功能已实现**——划句分词着色、排行榜、词库/表管理、设置、
+> 当前状态：**业务功能已实现**——划句分词着色、排行榜、词典/表管理、设置、
 > 全局热键取词与悬浮小窗均已可用。前端统一经 `src/lib/api/bridge.ts` 调用 Rust
 > 侧命令（命令清单见 `docs/DESIGN.md` §8.1）。
 
@@ -122,7 +122,7 @@ apps/desktop/
 │  │  ├─ SentencesPage.svelte  # 划句分析（核心）
 │  │  ├─ LeaderboardPage.svelte# 排行榜
 │  │  ├─ SettingsPage.svelte   # 设置
-│  │  ├─ DictsPage.svelte      # 词库管理
+│  │  ├─ DictsPage.svelte      # 词典管理
 │  │  └─ TablesPage.svelte     # 表管理
 │  └─ lib/
 │     ├─ utils.ts                     # cn() —— clsx + tailwind-merge

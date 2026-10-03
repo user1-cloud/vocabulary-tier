@@ -2,37 +2,37 @@
 //!
 //! ## 为什么需要它
 //!
-//! 全量语料（实测 140 GB）放不下同一块磁盘，只能**一个域一个域**地扫。而 `scan`
-//! 的产物是「一份产物 = `meta.json` + 若干平级作用域目录」，每扫一次都会整体覆盖
+//! 全量语料（实测 140 GB）放不下同一块磁盘，只能**一个表组一个表组**地扫。而 `scan`
+//! 的产物是「一份产物 = `meta.json` + 若干平级表组目录」，每扫一次都会整体覆盖
 //! `meta.json` —— 分次扫出来的几份产物谁也不知道对方存在。于是需要一步显式的合流：
 //!
 //! ```text
-//! vocfreq scan --corpus 语料\news --out 分片\A        # 一份产物，只有 news 作用域
-//! vocfreq scan --corpus 语料\wiki --out 分片\B        # 另一份产物，只有 wiki 作用域
-//! vocfreq merge --from-data 分片\A --from-data 分片\B --scope 全库 --out 词表\主表
-//! vocfreq compose --from-data 词表\主表 --source news/word --source wiki/word --scope full
+//! vocfreq scan --corpus 语料\news --out 分片\A        # 一份产物，只有 news 表组
+//! vocfreq scan --corpus 语料\wiki --out 分片\B        # 另一份产物，只有 wiki 表组
+//! vocfreq merge --from-data 分片\A --from-data 分片\B --scope 全库 --out 词频表\主表
+//! vocfreq compose --from-data 词频表\主表 --source news/word --source wiki/word --scope full
 //! ```
 //!
-//! 合流出来的仍是一份**标准 v3 单产物**（`meta.json` + 平级作用域目录），对桌面端
+//! 合流出来的仍是一份**标准 v3 单产物**（`meta.json` + 平级表组目录），对桌面端
 //! 完全透明 —— 它没有"这是一份合流产物"这种概念，也不需要知道。
 //!
-//! ## 硬门槛：词库链与分词口径必须完全一致
+//! ## 硬门槛：词典链与分词口径必须完全一致
 //!
-//! 合流只是把各产物的作用域目录摆在一起、把 `tables[]` 与 `domains[]` 并起来，
-//! **不做任何求解或取舍**。它成立的前提是各源表用的是同一套词库、同一套分词口径
-//! （`docs/DATA_LAYOUT.md` §三.3）—— 否则合流出来的产物里，同一个词在不同作用域里
+//! 合流只是把各产物的表组目录摆在一起、把 `tables[]` 与 `domains[]` 并起来，
+//! **不做任何求解或取舍**。它成立的前提是各源表用的是同一套词典、同一套分词口径
+//! （`docs/DATA_LAYOUT.md` §三.3）—— 否则合流出来的产物里，同一个词在不同表组里
 //! 的频次来自不同的切分规则，排名自相矛盾，而且**没人看得出来**。
 //!
-//! 所以这里逐份校验 [`TokenizerMeta`] 的每一个字段与整条词库链的指纹：
+//! 所以这里逐份校验 [`TokenizerMeta`] 的每一个字段与整条词典链的指纹：
 //! 任何一处不一致都**拒绝合流**，并指出是哪一份产物、哪个字段不同
 //! （见 [`crate::compose::check_mergeable`]）。宁可拒绝，也不静默合并。
 //!
 //! ## 与 `compose` 的分工
 //!
-//! * `merge`：**并列**多份产物的作用域（不改变任何频次）；
-//! * [`crate::compose`]：单份产物**内部**把若干作用域**相加**成一张新表。
+//! * `merge`：**并列**多份产物的表组（不改变任何频次）；
+//! * [`crate::compose`]：单份产物**内部**把若干表组**相加**成一张新表。
 //!
-//! 合流之后用 `compose` 把各作用域相加，就得到 `full` —— 数学上与"一次性全量扫描"
+//! 合流之后用 `compose` 把各表组相加，就得到 `full` —— 数学上与"一次性全量扫描"
 //! 逐条相等（`compose.rs` 顶上那段推导）。
 
 use std::collections::BTreeMap;
@@ -64,7 +64,7 @@ pub struct MergedProduct {
     pub out: String,
     /// 合起来的源产物目录
     pub from: Vec<String>,
-    /// 目标产物里的作用域（`full` 优先，其余按名字）
+    /// 目标产物里的表组（`full` 优先，其余按名字）
     pub scopes: Vec<String>,
     pub tables: u64,
     pub entries: u64,
@@ -75,7 +75,7 @@ pub struct MergedProduct {
 
 /// 把 N 份源产物合流成一份新产物。
 ///
-/// 全部校验都在**动手写盘之前**做完（词库链、分词口径、作用域名冲突、目标目录是否
+/// 全部校验都在**动手写盘之前**做完（词典链、分词口径、表组名冲突、目标目录是否
 /// 可写、源目录之间是否互相嵌套），随后先在临时目录里铺完整份产物、最后一步整体改名
 /// 到位。因此任何一步失败都不会留下半截产物 —— 目标目录要么不存在，要么是完整的。
 pub fn merge(spec: &MergeSpec) -> Result<MergedProduct> {
@@ -139,7 +139,7 @@ pub fn merge(spec: &MergeSpec) -> Result<MergedProduct> {
             )));
         }
     }
-    // 源产物之间互相嵌套时，平铺出来的作用域目录会互相盖，直接拒绝
+    // 源产物之间互相嵌套时，平铺出来的表组目录会互相盖，直接拒绝
     for (i, (a, _)) in opened.iter().enumerate() {
         for (b, _) in opened.iter().skip(i + 1) {
             let (ca, cb) = (canonical_or_self(a), canonical_or_self(b));
@@ -151,7 +151,7 @@ pub fn merge(spec: &MergeSpec) -> Result<MergedProduct> {
             }
             if ca.starts_with(&cb) || cb.starts_with(&ca) {
                 return Err(Error::Other(format!(
-                    "源产物 {} 与 {} 互相嵌套，合流时作用域目录会互相覆盖。\
+                    "源产物 {} 与 {} 互相嵌套，合流时表组目录会互相覆盖。\
                      请先把它们挪成互不相邻的目录。",
                     a.display(),
                     b.display()
@@ -160,7 +160,7 @@ pub fn merge(spec: &MergeSpec) -> Result<MergedProduct> {
         }
     }
 
-    // 3) **硬门槛**：词库链与分词口径必须完全一致；作用域名不许撞车
+    // 3) **硬门槛**：词典链与分词口径必须完全一致；表组名不许撞车
     check_mergeable(&products, &labels)?;
     let merged_tables = merge_table_refs(&products, &labels)?;
 
@@ -219,7 +219,7 @@ pub fn merge(spec: &MergeSpec) -> Result<MergedProduct> {
 
 /// 一份源产物里的一张表在目标产物里的落点。
 struct MergedTable {
-    /// 目标产物里的作用域目录名（= 源产物的作用域名，合流不重命名）
+    /// 目标产物里的表组目录名（= 源产物的表组名，合流不重命名）
     scope: String,
     kind: String,
     /// 这张表的文件在哪个源产物目录里。合流**不重写任何表**，所以照搬即可。
@@ -227,16 +227,16 @@ struct MergedTable {
     meta: TableMeta,
 }
 
-/// 把各源产物的表平铺成一张清单：**作用域名不许跨产物重复**。
+/// 把各源产物的表平铺成一张清单：**表组名不许跨产物重复**。
 ///
-/// 作用域就是磁盘上的目录名，两份产物都有 `news` 的话，谁盖谁都是静默丢数据，
-/// 所以宁可拒绝。同一个作用域内部的重复登记（同一份产物里 `news/word` 出现两次）
+/// 表组就是磁盘上的目录名，两份产物都有 `news` 的话，谁盖谁都是静默丢数据，
+/// 所以宁可拒绝。同一个表组内部的重复登记（同一份产物里 `news/word` 出现两次）
 /// 也一并拒绝 —— 那是产物本身坏了。
 fn merge_table_refs(products: &[&Dataset], labels: &[String]) -> Result<Vec<MergedTable>> {
     let mut out: Vec<MergedTable> = Vec::new();
-    // 每份产物内部：作用域 → 已登记的类型。用来抓"同一份产物里登记了两次"。
+    // 每份产物内部：表组 → 已登记的类型。用来抓"同一份产物里登记了两次"。
     let mut kinds_within: BTreeMap<usize, BTreeMap<String, Vec<String>>> = BTreeMap::new();
-    // 全局：作用域 → 拥有它的产物下标。用来抓跨产物撞名。
+    // 全局：表组 → 拥有它的产物下标。用来抓跨产物撞名。
     let mut owner: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
     for (pi, ds) in products.iter().enumerate() {
@@ -245,7 +245,7 @@ fn merge_table_refs(products: &[&Dataset], labels: &[String]) -> Result<Vec<Merg
             let kinds = within.entry(t.path.clone()).or_default();
             if kinds.iter().any(|k| k == &t.kind) {
                 return Err(Error::Other(format!(
-                    "作用域「{}」的 {} 表在同一份产物里登记了两次（{}）。\
+                    "表组「{}」的 {} 表在同一份产物里登记了两次（{}）。\
                      这份产物本身是坏的，先用 `vocfreq info` 看一眼再合流。",
                     t.path, t.kind, labels[pi]
                 )));
@@ -280,8 +280,8 @@ fn merge_table_refs(products: &[&Dataset], labels: &[String]) -> Result<Vec<Merg
     }
     if !clashes.is_empty() {
         return Err(Error::Other(format!(
-            "作用域名撞车，拒绝合流（两个同名作用域只能留一个，静默丢数据比报错糟得多）：\n  {}\n\
-             换一份源产物，或先在其中一份里把作用域改个名。",
+            "表组名撞车，拒绝合流（两个同名表组只能留一个，静默丢数据比报错糟得多）：\n  {}\n\
+             换一份源产物，或先在其中一份里把表组改个名。",
             clashes.join("\n  ")
         )));
     }
@@ -368,7 +368,7 @@ fn build_meta(opened: &[(PathBuf, Dataset)], tables: &[MergedTable]) -> Meta {
             scopes.sort_unstable();
             scopes.dedup();
             format!(
-                "合流产物：{} 份产物 / {} 个作用域 / {} 个语料切片",
+                "合流产物：{} 份产物 / {} 个表组 / {} 个语料切片",
                 opened.len(),
                 scopes.len(),
                 domains.len()

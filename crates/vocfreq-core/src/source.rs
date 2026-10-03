@@ -158,7 +158,7 @@ pub fn detect<'r>(rules: &'r [SourceRule], sample: &[u8]) -> Result<&'r SourceRu
 /// 也就是说 `Cow<'de, str>` 并不是零拷贝，它每次都先造一个 `String`。而 MNBVC 的
 /// 段落数组是 `[{行号, 是否重复, …, 内容}, …]`，一个 1GB 文件里有上百万个元素、
 /// 每个元素 5 个键 —— 用 `Cow` 当键就等于上千万次堆分配。实测这是扫描阶段最大的
-/// 单项开销（gov 域因此慢了 5.7 倍）。
+/// 单项开销（gov 表组因此慢了 5.7 倍）。
 ///
 /// 这里改用 `deserialize_str` + `visit_borrowed_str`：无转义时零拷贝，
 /// 有转义时才退化成 Owned。

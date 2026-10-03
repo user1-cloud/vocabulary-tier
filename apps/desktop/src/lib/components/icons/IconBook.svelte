@@ -1,5 +1,5 @@
 <script lang="ts">
-  /** 词库管理：一本摊开的词典（「词 词频 词性」那种每行一条的文本） */
+  /** 词典管理：一本摊开的词典（「词 词频 词性」那种每行一条的文本） */
   import type { IconProps } from './icon-types';
 
   let {

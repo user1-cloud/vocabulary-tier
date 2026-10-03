@@ -1,15 +1,27 @@
+<script module lang="ts">
+  import type { NavSection } from '$lib/navigation';
+
+  /** 页面内可导航区块：navigation.ts 直接组合它，新增区块只需在这里加一项 + 一个 <SectionCard> */
+  export const PAGE_SECTIONS = {
+    library: { id: 'library', labelKey: 'tables.library.title' },
+    list: { id: 'list', labelKey: 'tables.listTitle' },
+    compose: { id: 'compose', labelKey: 'tables.compose.title' },
+    tier: { id: 'tier', labelKey: 'tables.tierConfigTitle' },
+  } as const satisfies Record<string, NavSection>;
+</script>
+
 <script lang="ts">
   /**
    * 表管理 —— 三件事：
    *
-   *   A. **频率表清单**：产物里每个**作用域**各有一张词频表 + 一张字表，它们**完全平级**
-   *      （`full` 只是"所有域加在一起"的那一个，没有任何特权）。这里只有一张统一清单，
-   *      不再分「全库表 / 分域表」两个区。
+   *   A. **频率表清单**：产物里每个**表组**各有一张词频表 + 一张字表，它们**完全平级**
+   *      （`full` 只是"所有表组加在一起"的那一个，没有任何特权）。这里只有一张统一清单，
+   *      不再分「全库表 / 表组」两个区。
    *   B. **主词频表**：指定哪一张决定"这个词有多常见"。划句分析的着色与分组、
    *      排行榜、分组阈值预览都以它为准，其余表只做对比。粒度是全局的 ——
    *      否则同一句话在两个页面会是两种颜色。
    *   C. **相加**：把若干张表加起来成一张新表。相加在数学上是精确的
-   *      （`scan` 本身就是"逐作用域扫完再累加"），新表与别的表完全平级：
+   *      （`scan` 本身就是"逐表组扫完再累加"），新表与别的表完全平级：
    *      能当主表、能再被相加、能删掉回收空间。
    *
    * 分组自定义（第四件事）在下面另一张卡片里：四种口径（**前%** / 排名 / 覆盖率 /
@@ -28,6 +40,7 @@
     CardTitle,
   } from '$lib/components/ui/card';
   import { Separator } from '$lib/components/ui/separator';
+  import { SectionCard } from '$lib/components/ui/section-card';
   import TierLegend from '$lib/components/analysis/TierLegend.svelte';
   import {
     activeDataset,
@@ -160,9 +173,9 @@
   let pendingTableDelete = $state<string | null>(null);
 
   // ------------------------------------------------- 相加
-  /** 勾选要相加的**作用域**（域相加：整域的 word+char 一起加） */
+  /** 勾选要相加的**表组**（表组相加：整表组的 word+char 一起加） */
   let composePicks = $state<string[]>([]);
-  /** 新作用域的名字 */
+  /** 新表组的名字 */
   let composeName = $state('');
   /** 用户是否手动改过新表名：一旦手动输入过就不再自动覆盖，直到清空/重置 */
   let composeNameTouched = $state(false);
@@ -181,7 +194,7 @@
   /** 编辑中的覆盖率目标（0..1），覆盖率模式用 */
   let coverage = $state<number[]>([]);
 
-  /** 覆盖率曲线缓存（主作用域的词频表 / 字表） */
+  /** 覆盖率曲线缓存（主表组的词频表 / 字表） */
   let curves = $state<{ word: TierCurve | null; char: TierCurve | null }>({ word: null, char: null });
   let curveBusy = $state(false);
   let curveError = $state('');
@@ -196,10 +209,10 @@
   /** 七组稳定标识：取色与身份都走它，不走组名 */
   const keys = $derived(tierKeysFrom(meta));
 
-  /** 全部作用域（表侧），`full` 优先 */
+  /** 全部表组（表侧），`full` 优先 */
   const scopes = $derived(metaScopes(meta));
 
-  /** 主作用域名（用户指定的那张；未指定时 `full` 优先） */
+  /** 主表组名（用户指定的那张；未指定时 `full` 优先） */
   const primary = $derived(primaryScope(meta));
 
   /**
@@ -208,7 +221,7 @@
    */
   const currentDir = $derived(activeTableDir(library));
 
-  /** 本页展示的一行：一个作用域 × 一种类型 */
+  /** 本页展示的一行：一个表组 × 一种类型 */
   type Row = { scope: string; table: TableMeta; isPrimary: boolean };
 
   const rows = $derived.by(() => {
@@ -219,7 +232,7 @@
         if (table) list.push({ scope, table, isPrimary: scope === primary });
       }
     }
-    // 主作用域那两张排最前，其余按作用域名
+    // 主表组那两张排最前，其余按表组名
     return list.sort((a, b) => {
       if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
       return a.scope.localeCompare(b.scope) || a.table.kind.localeCompare(b.table.kind);
@@ -462,7 +475,7 @@
   /**
    * 重新统计：把该表的语料库与参数放进「一次性交接单」，再跳到扫描页。
    *
-   * 为什么不在本页直接起扫描：扫描表单（线程 / HMM / 分域勾选 …）是扫描页的状态，
+   * 为什么不在本页直接起扫描：扫描表单（线程 / HMM / 表组勾选 …）是扫描页的状态，
    * 在这里复制一份必然漂移。交接单的说明见 `$lib/scan-prefill.svelte.ts`。
    */
   function rescanTable(item: TableItem) {
@@ -563,7 +576,7 @@
 
   // ---------------------------------------------------------------- 主词频表
 
-  /** 把某个作用域设为主表（词频表与字表一起换，口径只能有一套） */
+  /** 把某个表组设为主表（词频表与字表一起换，口径只能有一套） */
   async function makePrimary(scope: string) {
     if (scope === primary) return;
     tableBusy = `primary:${scope}`;
@@ -575,7 +588,7 @@
     }
     // 后端已把 primary_scope 持久化并重开数据集；这里必须同步前端共享状态，
     // 否则 primaryScope(meta) 读到的还是旧值，会一路回退到 full ——
-    // 造成「改了主分域却仍显示/生效为 full」的前后端口径分裂。
+    // 造成「改了主表组却仍显示/生效为 full」的前后端口径分裂。
     appSettings.value.primaryScope = scope;
     meta = res.data;
     curves = { word: null, char: null };
@@ -589,7 +602,7 @@
     return composePicks.join(' + ');
   }
 
-  /** 勾选 / 取消勾选一个**作用域**（域相加：整域的 word+char 一起加） */
+  /** 勾选 / 取消勾选一个**表组**（表组相加：整表组的 word+char 一起加） */
   function toggleComposePick(scope: string) {
     composePicks = composePicks.includes(scope)
       ? composePicks.filter((s) => s !== scope)
@@ -598,18 +611,18 @@
     if (!composeNameTouched) composeName = autoComposeName();
   }
 
-  /** 所有作用域是否已全选 */
+  /** 所有表组是否已全选 */
   function composeAllPicked(): boolean {
     return scopes.length > 0 && scopes.every((s) => composePicks.includes(s));
   }
 
-  /** 全选 / 取消全选所有作用域 */
+  /** 全选 / 取消全选所有表组 */
   function toggleComposeAll() {
     composePicks = composeAllPicked() ? [] : [...scopes];
     if (!composeNameTouched) composeName = autoComposeName();
   }
 
-  /** 某作用域下现有的表（word / char） */
+  /** 某表组下现有的表（word / char） */
   function composeScopeTables(scope: string): TableMeta[] {
     return meta?.tables.filter((t) => t.path === scope) ?? [];
   }
@@ -619,7 +632,7 @@
       composeError = t('tables.compose.needPick');
       return;
     }
-    // 域相加：勾选的是**作用域**，展开成该域存在的每类表，词表+字表一起加。
+    // 表组相加：勾选的是**表组**，展开成该表组存在的每类表，词表+字表一起加。
     // 后端 `kind` 不给 = 源表里出现过的每一类都产出（见 compose.rs），跨类天然合法。
     const sources = composePicks.flatMap((scope) =>
       (['word', 'char'] as const)
@@ -648,7 +661,7 @@
     composePicks = [];
     composeName = '';
     composeNameTouched = false;
-    // 新表要立刻出现在清单与作用域选择里
+    // 新表要立刻出现在清单与表组选择里
     await refreshTables();
     const current = await activeDataset();
     meta = current.ok ? current.data : meta;
@@ -878,23 +891,22 @@
     </Card>
   {:else}
     <!-- ==================== 词频表库（数据文件夹 tables\） ==================== -->
-    <Card data-testid="library-tables-card" data-section="library">
-      <CardHeader>
-        <div class="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('tables.library.title')}</CardTitle>
-          <Badge variant="secondary">{t('tables.library.countBadge', { count: formatInt(tables.length) })}</Badge>
-          {#if tables.find((table) => table.active)}
-            <Badge variant="outline">
-              {t('tables.library.activeBadge', { name: tables.find((table) => table.active)?.name ?? '' })}
-            </Badge>
-          {/if}
-          <Button variant="outline" size="sm" class="ml-auto" onclick={() => void refreshTables()}>
-            {t('tables.recheck')}
-          </Button>
-        </div>
-        <CardDescription>{t('tables.library.description')}</CardDescription>
-      </CardHeader>
-      <CardContent class="flex flex-col gap-3">
+    <SectionCard
+      section={PAGE_SECTIONS.library}
+      descriptionKey="tables.library.description"
+      data-testid="library-tables-card"
+    >
+      {#snippet titleExtra()}
+        <Badge variant="secondary">{t('tables.library.countBadge', { count: formatInt(tables.length) })}</Badge>
+        {#if tables.find((table) => table.active)}
+          <Badge variant="outline">
+            {t('tables.library.activeBadge', { name: tables.find((table) => table.active)?.name ?? '' })}
+          </Badge>
+        {/if}
+        <Button variant="outline" size="sm" class="ml-auto" onclick={() => void refreshTables()}>
+          {t('tables.recheck')}
+        </Button>
+      {/snippet}
         {#if library}
           <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
             <span>{t('tables.library.dataDir', { dir: library.root })}</span>
@@ -1079,8 +1091,7 @@
             {/if}
           </div>
         {/each}
-      </CardContent>
-    </Card>
+  </SectionCard>
 
     {#if loadError}
       <Card class="border-destructive/30">
@@ -1110,23 +1121,60 @@
         emphasis: t('tables.rankUpperBound'),
       })}
 
-      <!-- ==================== A. 频率表（全部作用域，平等） ==================== -->
-      <Card data-testid="table-list-card" data-section="list">
+      <!-- ==================== 主表组 ==================== -->
+      <Card data-testid="primary-scope-card">
         <CardHeader>
           <div class="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('tables.listTitle')}</CardTitle>
-            <Badge variant="secondary" data-testid="table-count">
-              {t('tables.tableCountBadge', { count: formatInt(rows.length) })}
-            </Badge>
-            <Badge variant="outline">{t('tables.scopeCountBadge', { count: formatInt(scopes.length) })}</Badge>
+            <CardTitle>{t('tables.primaryDomain.title')}</CardTitle>
             <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
-            {#if saving}<Badge variant="outline">{t('tables.saving')}</Badge>{/if}
           </div>
-          <CardDescription>
-            {segPrimary[0]}<b>{segPrimary[1]}</b>{segPrimary[2]}
-          </CardDescription>
+          <CardDescription>{t('tables.primaryDomain.description')}</CardDescription>
         </CardHeader>
-        <CardContent class="flex flex-col gap-3">
+        <CardContent class="flex flex-col gap-1.5">
+          {#each scopes as scope}
+            {@const word = findTable(meta.tables, 'word', scope)}
+            {@const char = findTable(meta.tables, 'char', scope)}
+            <label
+              class={cn(
+                'flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-xs',
+                scope === primary ? 'border-primary/40 bg-primary/5' : 'border-border'
+              )}
+            >
+              <input
+                type="radio"
+                name="primary-scope"
+                class="size-3.5 accent-[var(--primary)]"
+                checked={scope === primary}
+                disabled={tableBusy === `primary:${scope}`}
+                onchange={() => void makePrimary(scope)}
+                aria-label={t('tables.primaryAria', { scope })}
+                data-primary-radio={scope}
+              />
+              <span class="font-medium">{scope}</span>
+              <span class="ml-auto text-muted-foreground">
+                {t('tables.primaryDomain.scopeSummary', {
+                  word: formatInt(word?.entries ?? 0),
+                  char: formatInt(char?.entries ?? 0),
+                })}
+              </span>
+            </label>
+          {/each}
+        </CardContent>
+      </Card>
+
+      <!-- ==================== A. 频率表（全部表组，平等） ==================== -->
+      <SectionCard section={PAGE_SECTIONS.list} data-testid="table-list-card">
+        {#snippet titleExtra()}
+          <Badge variant="secondary" data-testid="table-count">
+            {t('tables.tableCountBadge', { count: formatInt(rows.length) })}
+          </Badge>
+          <Badge variant="outline">{t('tables.scopeCountBadge', { count: formatInt(scopes.length) })}</Badge>
+          <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
+          {#if saving}<Badge variant="outline">{t('tables.saving')}</Badge>{/if}
+        {/snippet}
+        {#snippet description()}
+          {segPrimary[0]}<b>{segPrimary[1]}</b>{segPrimary[2]}
+        {/snippet}
           <div class="scrollbar-thin max-h-[30rem] overflow-auto rounded-lg border border-border">
             <table class="w-full border-collapse text-xs">
               <thead class="sticky top-0 z-10 bg-surface-muted text-muted-foreground">
@@ -1138,15 +1186,11 @@
                   <th class="px-3 py-2 text-right font-medium">{t('tables.col.vfr')}</th>
                   <th class="px-3 py-2 text-right font-medium">{t('tables.col.lastCoverage')}</th>
                   <th class="px-3 py-2 text-left font-medium">{t('tables.col.source')}</th>
-                  <th class="px-3 py-2 text-center font-medium">{t('tables.col.primary')}</th>
                 </tr>
               </thead>
               <tbody>
                 {#each rows as row (tableKey(row.scope, row.table.kind))}
-                  <tr
-                    class={cn('border-t border-border/70', row.isPrimary && 'bg-primary/5')}
-                    data-table-row={tableKey(row.scope, row.table.kind)}
-                  >
+                  <tr class={cn('border-t border-border/70')} data-table-row={tableKey(row.scope, row.table.kind)}>
                     <td class="px-3 py-2">
                       <span class="font-medium">{row.scope}</span>
                       <span class="ml-2 font-mono text-[11px] text-muted-foreground"
@@ -1172,18 +1216,6 @@
                         <span class="text-[11px] text-muted-foreground">{t('tables.sourceScanned')}</span>
                       {/if}
                     </td>
-                    <td class="px-3 py-2 text-center">
-                      <input
-                        type="radio"
-                        name="primary-scope"
-                        class="size-3.5 accent-[var(--primary)]"
-                        checked={row.isPrimary}
-                        disabled={tableBusy === `primary:${row.scope}`}
-                        onchange={() => void makePrimary(row.scope)}
-                        aria-label={t('tables.primaryAria', { scope: row.scope })}
-                        data-primary-radio={row.scope}
-                      />
-                    </td>
                   </tr>
                 {/each}
               </tbody>
@@ -1193,24 +1225,18 @@
           <p class="rounded-md bg-surface-muted/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
             {t('tables.equalNote')}
           </p>
-        </CardContent>
-      </Card>
+  </SectionCard>
 
       <!-- ==================== B. 相加 ==================== -->
-      <Card data-testid="compose-card" data-section="compose">
-        <CardHeader>
-          <div class="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('tables.compose.title')}</CardTitle>
-            {#if composePicks.length > 0}
-              <Badge variant="secondary">
-                {t('tables.compose.pickedBadge', { count: formatInt(composePicks.length) })}
-              </Badge>
-            {/if}
-            {#if composeBusy}<Badge variant="outline">{t('tables.compose.running')}</Badge>{/if}
-          </div>
-          <CardDescription>{t('tables.compose.description')}</CardDescription>
-        </CardHeader>
-        <CardContent class="flex flex-col gap-3">
+      <SectionCard section={PAGE_SECTIONS.compose} descriptionKey="tables.compose.description" data-testid="compose-card">
+        {#snippet titleExtra()}
+          {#if composePicks.length > 0}
+            <Badge variant="secondary">
+              {t('tables.compose.pickedBadge', { count: formatInt(composePicks.length) })}
+            </Badge>
+          {/if}
+          {#if composeBusy}<Badge variant="outline">{t('tables.compose.running')}</Badge>{/if}
+        {/snippet}
           <div class="flex flex-col gap-2">
             <div class="flex items-center justify-between gap-2">
               <span class="text-xs font-medium">{t('tables.compose.pickLabel')}</span>
@@ -1306,23 +1332,18 @@
           <p class="text-[11px] leading-relaxed text-muted-foreground">
             {t('tables.compose.note')}
           </p>
-        </CardContent>
-      </Card>
+  </SectionCard>
 
       <!-- ==================== C. 分组自定义 ==================== -->
-      <Card data-testid="tier-config-card" data-section="tier">
-        <CardHeader>
-          <div class="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('tables.tierConfigTitle')}</CardTitle>
-            <Badge variant="outline">{t('tables.tierCountBadge')}</Badge>
-            <Badge variant="secondary">{t(METHOD_LABELS[method])}</Badge>
-            <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
-          </div>
-          <CardDescription>
-            {segTierDesc[0]}<b>{segTierDesc[1]}</b>{segTierDesc[2]}
-          </CardDescription>
-        </CardHeader>
-        <CardContent class="flex flex-col gap-4">
+      <SectionCard section={PAGE_SECTIONS.tier} contentClass="flex flex-col gap-4" data-testid="tier-config-card">
+        {#snippet titleExtra()}
+          <Badge variant="outline">{t('tables.tierCountBadge')}</Badge>
+          <Badge variant="secondary">{t(METHOD_LABELS[method])}</Badge>
+          <Badge variant="outline">{t('tables.primaryBadge', { scope: primary })}</Badge>
+        {/snippet}
+        {#snippet description()}
+          {segTierDesc[0]}<b>{segTierDesc[1]}</b>{segTierDesc[2]}
+        {/snippet}
           <!-- 方法切换 -->
           <div class="flex flex-col gap-2">
             <span class="text-xs font-medium">{t('tables.methodLabel')}</span>
@@ -1633,8 +1654,7 @@
             />
             <p class="text-[11px] text-muted-foreground">{t('tables.applyNote')}</p>
           </div>
-        </CardContent>
-      </Card>
+  </SectionCard>
     {/if}
   {/if}
 </div>

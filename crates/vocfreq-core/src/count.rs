@@ -109,7 +109,7 @@ impl GlobalCounts {
         }
     }
 
-    /// 把某个域（或某批）的结果并入全库表。
+    /// 把某个表组（或某批）的结果并入全库表。
     pub fn merge(&mut self, other: &LocalCounts) {
         for (w, c) in &other.words {
             match self.words.get_mut(w.as_ref()) {

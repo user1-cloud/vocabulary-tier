@@ -1,11 +1,11 @@
 //! 排行与七组分带。
 //!
 //! 分带口径默认是**前%**（`排名 ÷ 该表条目数 × 100`），见 `docs/DESIGN.md` §5.3：
-//! 前%只跟位次有关，换一张规模差很多的表（分域表几万条、全量表几百万条）也不会失真。
+//! 前%只跟位次有关，换一张规模差很多的表（表组几万条、全量表几百万条）也不会失真。
 //! 绝对排名的两套默认阈值仍然保留（[`default_word_tiers`] / [`default_char_tiers`]），
 //! 供设置里切回 `tierMethod = rank` 时用。
 //!
-//! ⚠ 词表与字表的默认阈值**不同**：字表只有约一万个不重复汉字，套用词表阈值会让所有字
+//! ⚠ 词频表与字表的默认阈值**不同**：字表只有约一万个不重复汉字，套用词频表阈值会让所有字
 //! 都落进「极多~很少」，色阶完全失去区分度。前%与绝对排名两套口径都遵守这条。
 
 use rustc_hash::FxHashMap;
@@ -32,25 +32,25 @@ pub const TIER_KEYS: [&str; 7] = [
     "very_rare",
 ];
 
-/// 词表默认的**前%上界**（0..100，6 个数，第 7 组是"以上全部"）。
+/// 词频表默认的**前%上界**（0..100，6 个数，第 7 组是"以上全部"）。
 ///
 /// 不是新拍的：它们是把旧的**绝对排名**默认值（`100 / 1k / 5k / 20k / 50k / 150k`）
-/// 放在实测的 380 万条全库词表上换算出来的，所以换口径之后色阶观感与从前一致
+/// 放在实测的 380 万条全库词频表上换算出来的，所以换口径之后色阶观感与从前一致
 /// （推导与双向验证见 `docs/DESIGN.md` §5.3）。
 pub const DEFAULT_TIER_PCT: [f64; 6] = [0.0026, 0.026, 0.132, 0.526, 1.32, 3.95];
 
 /// 字表默认的前%上界。
 ///
 /// 由旧的 `≤50 / ≤200 / ≤600 / ≤1500 / ≤3000 / ≤5000` 在约 1.9 万字的表上换算而来。
-/// 直接套词表那套会让头几档只剩个位数的字、九成以上的字全挤进「极少」。
+/// 直接套词频表那套会让头几档只剩个位数的字、九成以上的字全挤进「极少」。
 pub const DEFAULT_CHAR_TIER_PCT: [f64; 6] = [0.26, 1.05, 3.16, 7.89, 15.8, 26.3];
 
-/// 词表的默认前%口径。
+/// 词频表的默认前%口径。
 pub fn default_tier_pct() -> &'static [f64; 6] {
     &DEFAULT_TIER_PCT
 }
 
-/// 按表的类型取默认前%口径（`char` 用字表那套，其余一律词表那套）。
+/// 按表的类型取默认前%口径（`char` 用字表那套，其余一律词频表那套）。
 pub fn default_tier_pct_for(kind: &str) -> &'static [f64; 6] {
     if kind == "char" {
         &DEFAULT_CHAR_TIER_PCT
@@ -153,7 +153,7 @@ fn tiers(bounds: [u64; 6]) -> Vec<Tier> {
     v
 }
 
-/// 词表默认阈值。
+/// 词频表默认阈值。
 ///
 /// 这是按**实测累计覆盖率**校准过的（全库 26.43 亿 token，见 `docs/DESIGN.md` §5.3）：
 ///
@@ -175,9 +175,9 @@ pub fn default_word_tiers() -> Vec<Tier> {
 
 /// 字表默认阈值。
 ///
-/// 字表只有约 1.9 万个不重复汉字（词表有 380 万），套用词表阈值会让所有字都落进
+/// 字表只有约 1.9 万个不重复汉字（词频表有 380 万），套用词频表阈值会让所有字都落进
 /// 「极多~很少」而丢掉区分度。实测前 50 个汉字覆盖约 29% 的汉字出现次数，
-/// 与词表「极多 ≤100」的覆盖率量级相当。
+/// 与词频表「极多 ≤100」的覆盖率量级相当。
 pub fn default_char_tiers() -> Vec<Tier> {
     tiers([50, 200, 600, 1_500, 3_000, 5_000])
 }
@@ -241,7 +241,7 @@ pub fn rank_entries(
 
 /// 同 [`rank_entries`]，但**消费**计数表、直接搬走已有的 `Box<str>`。
 ///
-/// 全库词表在千万级时，逐个 `clone()` 意味着上千万次堆分配；实测这是排行榜阶段
+/// 全库词频表在千万级时，逐个 `clone()` 意味着上千万次堆分配；实测这是排行榜阶段
 /// 最大的一笔开销。计数表在排名后不再需要，因此能搬就不要克隆。
 pub fn rank_entries_owned(
     map: FxHashMap<Box<str>, u64>,
@@ -354,11 +354,11 @@ mod tests {
         let stats = tier_stats(&entries, &tiers);
         let nonempty = stats.iter().filter(|s| s.entries > 0).count();
         assert_eq!(nonempty, 7, "七组都应非空: {stats:?}");
-        // 反之，若误用词表阈值，最后一组会是空的
+        // 反之，若误用词频表阈值，最后一组会是空的
         let word_stats = tier_stats(&entries, &default_word_tiers());
         assert_eq!(
             word_stats[6].entries, 0,
-            "词表阈值套在字表上会让「极少」为空"
+            "词频表阈值套在字表上会让「极少」为空"
         );
     }
 
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn default_pcts_reproduce_the_old_absolute_thresholds() {
-        // 默认前%的**来历**：旧的绝对阈值在实测的 380 万条全库词表上换算得来。
+        // 默认前%的**来历**：旧的绝对阈值在实测的 380 万条全库词频表上换算得来。
         // 换算回去必须落在旧阈值附近，否则说明口径被改动过。见 docs/DESIGN.md §5.3。
         //
         // 容差 5% 而不是更紧：表规模与"约 1.9 万字"都是**约数**，换算本身带取整误差。
@@ -520,14 +520,14 @@ mod tests {
     fn default_pct_for_picks_the_char_table_by_kind() {
         assert_eq!(default_tier_pct_for("char"), &DEFAULT_CHAR_TIER_PCT);
         assert_eq!(default_tier_pct_for("word"), &DEFAULT_TIER_PCT);
-        // 不认识的类型按词表处理（宁可给一套通用口径，也不要空数组）
+        // 不认识的类型按词频表处理（宁可给一套通用口径，也不要空数组）
         assert_eq!(default_tier_pct_for("something"), &DEFAULT_TIER_PCT);
         // 前%只有 6 档上界，第 7 组是"以上全部"
         assert_eq!(default_tier_pct().len(), TIER_NAMES.len() - 1);
         assert_eq!(DEFAULT_CHAR_TIER_PCT.len(), TIER_NAMES.len() - 1);
-        // 字表那套必须比词表**宽松**：字表条目少得多，套词表那套头几档会只剩个位数
+        // 字表那套必须比词频表**宽松**：字表条目少得多，套词频表那套头几档会只剩个位数
         for (w, c) in DEFAULT_TIER_PCT.iter().zip(DEFAULT_CHAR_TIER_PCT.iter()) {
-            assert!(c > w, "字表前%上界 {c} 应大于词表的 {w}");
+            assert!(c > w, "字表前%上界 {c} 应大于词频表的 {w}");
         }
     }
 
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(sorted.len(), TIER_KEYS.len(), "稳定标识不能重复");
         assert_eq!(TIER_KEYS[0], "very_common");
         assert_eq!(TIER_KEYS[6], "very_rare");
-        // 词表的口径也应当能被前%算回来（默认值就是它）
+        // 词频表的口径也应当能被前%算回来（默认值就是它）
         assert_eq!(default_tier_pct(), &DEFAULT_TIER_PCT);
     }
 }

@@ -28,12 +28,12 @@ export type AppInfo = {
 // 语料库探测
 // ---------------------------------------------------------------------------
 
-/** 单个分域的探测结果 */
+/** 单个表组的探测结果 */
 export type DomainPlan = {
   name: string;
   files: number;
   bytes: number;
-  /** 该分域命中的解析规则说明（给人看的） */
+  /** 该表组命中的解析规则说明（给人看的） */
   rules: string[];
 };
 
@@ -69,13 +69,13 @@ export type TierStat = {
   cumulative: number;
 };
 
-/** 一张结果表（**一个作用域的一种类型**：`full` 的词表、`news` 的字表…） */
+/** 一张结果表（**一个表组的一种类型**：`full` 的词频表、`news` 的字表…） */
 export type TableMeta = {
   /**
-   * **作用域 id**（不是路径），同时是产物目录下的子目录名：`full`、`news`、
+   * **表组 id**（不是路径），同时是产物目录下的子目录名：`full`、`news`、
    * `相加：财经`。
    *
-   * ⚠ schema v3 之前这里存的是 `full/word`、`domains/news/word` 这种把作用域与
+   * ⚠ schema v3 之前这里存的是 `full/word`、`domains/news/word` 这种把表组与
    * 类型糊在一起的"路径"。现在类型在 [`kind`](#kind) 里，两者合起来才是表身份
    * —— 拼字符串一律走 [`tableKey`](#tableKey)，别自己拼。
    */
@@ -100,12 +100,12 @@ export type TableMeta = {
   source_tables?: string[];
 };
 
-/** 表身份：`作用域/类型`。**全前端只有这一处**拼这个字符串。 */
+/** 表身份：`表组/类型`。**全前端只有这一处**拼这个字符串。 */
 export function tableKey(scope: string, kind: string): string {
   return `${scope}/${kind}`;
 }
 
-/** 拆开表身份。作用域自身可能含 `/`，所以从**右边**切最后一个。 */
+/** 拆开表身份。表组自身可能含 `/`，所以从**右边**切最后一个。 */
 export function splitTableKey(key: string): { scope: string; kind: string } {
   const i = key.lastIndexOf('/');
   if (i < 0) return { scope: key, kind: '' };
@@ -129,16 +129,16 @@ export type TokenizerMeta = {
   version: string;
   hmm: boolean;
   /**
-   * **v2**：词库链，**按装载顺序** —— `dicts[0]` 是主词库，其后都是叠加词库。
+   * **v2**：词典链，**按装载顺序** —— `dicts[0]` 是主词典，其后都是叠加词典。
    *
-   * 每份都带 `sha256`，所以读取方能回答「这张表是不是还配得上当前这份词库」。
-   * 词库外置之后这是唯一权威的词库记录；`legacy_dict` / `user_dict` 只是老产物残留。
+   * 每份都带 `sha256`，所以读取方能回答「这张表是不是还配得上当前这份词典」。
+   * 词典外置之后这是唯一权威的词典记录；`legacy_dict` / `user_dict` 只是老产物残留。
    *
-   * 老产物（`schema_version = 1`）没有这个字段 → 空数组，**不要**据此断定「没有词库」。
+   * 老产物（`schema_version = 1`）没有这个字段 → 空数组，**不要**据此断定「没有词典」。
    */
   dicts: DictRef[];
   /**
-   * **v1 老字段，只读不写**：老产物把主词库记成一句自由文本标签
+   * **v1 老字段，只读不写**：老产物把主词典记成一句自由文本标签
    * （`"dict": "builtin(jieba dict.txt, 349046 entries)"`）。
    *
    * 新产物永不写它。读取时按 `DictRef` 处理（Rust 侧的反序列化接受纯字符串，
@@ -155,7 +155,7 @@ export type TokenizerMeta = {
 };
 
 /**
- * 词库链里实际生效的那几份（优先 `dicts`，为空时回退到两个 v1 老字段）。
+ * 词典链里实际生效的那几份（优先 `dicts`，为空时回退到两个 v1 老字段）。
  *
  * 与 Rust 侧 `vocfreq_core::artifact::TokenizerMeta::resolved_dicts()` 等价。
  */
@@ -186,7 +186,7 @@ export type Meta = {
    * 两者从前是同一件事，schema v3 起不是了：
    *
    * - 「生成词频表」页的扫描计划显示的是**语料切片**；
-   * - 「划句分析」「排行榜」「表管理」的作用域则取自 [`Meta.scopes`](#scopes)（表）。
+   * - 「划句分析」「排行榜」「表管理」的表组则取自 [`Meta.scopes`](#scopes)（表）。
    */
   domains: { name: string; files: number; bytes: number }[];
   tables: TableMeta[];
@@ -208,7 +208,7 @@ export type Meta = {
 };
 
 /**
- * 全部**作用域**（表侧），去重后「`full` 优先，其余按名字」排序。
+ * 全部**表组**（表侧），去重后「`full` 优先，其余按名字」排序。
  *
  * 与 Rust 侧 `Meta::scopes()` 等价。注意别和 [`Meta.domains`](#domains) 混了：
  * 那个是**语料切片**，这个是**表**。
@@ -225,10 +225,10 @@ export function metaScopes(meta: Meta | null | undefined): string[] {
   });
 }
 
-/** 全量语料对应的作用域 id。它**不是特权作用域**，只是"所有域加一起"那一份。 */
+/** 全量语料对应的表组 id。它**不是特权表组**，只是"所有表组加一起"那一份。 */
 export const FULL_SCOPE = 'full';
 
-/** 找一张表：作用域 + 类型。 */
+/** 找一张表：表组 + 类型。 */
 export function findTableMeta(
   meta: Meta | null | undefined,
   scope: string,
@@ -237,7 +237,7 @@ export function findTableMeta(
   return meta?.tables.find((t) => t.path === scope && t.kind === kind);
 }
 
-/** 按表身份（`作用域/类型`）找一张表。 */
+/** 按表身份（`表组/类型`）找一张表。 */
 export function findTableMetaByKey(
   meta: Meta | null | undefined,
   key: string
@@ -261,7 +261,7 @@ export type DatasetStatus = {
  * `invoke('tier_curve', { path, dir, maxPoints })` 的返回类型。
  *
  * `points` 是 `[rank, 累计覆盖率 0..1]`，rank 严格递增、覆盖率单调不减；
- * 采样在头部密、尾部疏（对数间隔），全库词表大约 500 个点。
+ * 采样在头部密、尾部疏（对数间隔），全库词频表大约 500 个点。
  * 前端用它把「目标累计覆盖率」反解成「排名上界」（见 format.ts 的
  * `rankForCoverage`，与 Rust 侧 `vocfreq_core::query::rank_for_coverage` 等价）。
  */
@@ -281,7 +281,7 @@ export type TierCurve = {
 
 /** 某个 token 在某张表里的排名（划句分析里的「各表对比」一列） */
 export type TableRank = {
-  /** 作用域：`full`、`news`、`相加：财经`… */
+  /** 表组：`full`、`news`、`相加：财经`… */
   scope: string;
   /** `word` | `char` */
   kind: string;
@@ -325,7 +325,7 @@ export type TokenInfo = {
   tier_name: string | null;
   in_dict: boolean | null;
   from_user: boolean | null;
-  /** 各作用域（表）里的排名对比 */
+  /** 各表组（表）里的排名对比 */
   table_ranks: TableRank[];
 };
 
@@ -356,7 +356,7 @@ export type WordHit = {
   top_pct: number;
   /** 查的那张表的条目数 */
   entries: number;
-  /** 查的是哪个作用域的表 */
+  /** 查的是哪个表组的表 */
   scope: string;
   in_dict: boolean;
 };
@@ -380,20 +380,20 @@ export type SearchRow = RankRow;
 export type DatasetHandle = Meta;
 
 // ---------------------------------------------------------------------------
-// 数据文件夹：词库（dicts\）与词表（tables\）
+// 数据文件夹：词典（dicts\）与词频表（tables\）
 //
 // 后端约定的字段名是**出参 snake_case、入参 camelCase**，所以本区块的类型
 // （都是命令的返回值）一律 snake_case，只有 `Origin` 的取值是字面量字符串。
 // ---------------------------------------------------------------------------
 
 /**
- * 这个词库 / 词表是怎么来的。**纯展示用**，不挂任何行为 —— 预置项同样可以删。
+ * 这个词典 / 词频表是怎么来的。**纯展示用**，不挂任何行为 —— 预置项同样可以删。
  *
  * 取值与 Rust 侧 `library::Origin`（`#[serde(rename_all = "snake_case")]`）一致。
  */
 export type Origin = 'seeded' | 'imported' | 'scanned' | 'unknown';
 
-/** 读一份词库时的统计（`dict_list()` 每项的 `report`） */
+/** 读一份词典时的统计（`dict_list()` 每项的 `report`） */
 export type DictLoadReport = {
   /** 有效词条数 */
   entries: number;
@@ -412,7 +412,7 @@ export type DictLoadReport = {
   freq_zero: number;
 };
 
-/** 一份词库的身份（写进 `meta.json` 的 `tokenizer.dicts[]`，也在 `DictItem.dict` 里） */
+/** 一份词典的身份（写进 `meta.json` 的 `tokenizer.dicts[]`，也在 `DictItem.dict` 里） */
 export type DictRef = {
   /** 稳定标识：文件名去掉 `.dict` */
   id: string;
@@ -437,12 +437,12 @@ export type DictItem = {
   origin: Origin;
 };
 
-/** 表与它记录的词库链之间的绑定状态（`#[serde(tag = "kind")]` 判别联合） */
+/** 表与它记录的词典链之间的绑定状态（`#[serde(tag = "kind")]` 判别联合） */
 export type Binding =
   | { kind: 'ok' }
   /** v1 老产物：没有指纹，**无从判断**（不是错误，但也没法说它一致） */
   | { kind: 'legacy' }
-  /** 找到了但内容变了（同一个词库被改过）→ 频次可能不准 */
+  /** 找到了但内容变了（同一个词典被改过）→ 频次可能不准 */
   | { kind: 'drifted'; changed: string[] }
   /** 找不到了 → 频次不可信 */
   | { kind: 'missing'; missing: string[] };
@@ -479,9 +479,9 @@ export type LibraryInfo = {
   active_table: string | null;
   /** 当前激活的表在数据文件夹之外时的绝对路径 */
   active_table_path: string | null;
-  /** 当前激活那张表的词库绑定状态 */
+  /** 当前激活那张表的词典绑定状态 */
   active_binding: Binding | null;
-  /** 打开激活表时攒下的告警（v1 老产物、词库缺失后退化…），界面应直接显示 */
+  /** 打开激活表时攒下的告警（v1 老产物、词典缺失后退化…），界面应直接显示 */
   active_warnings: string[];
 };
 
@@ -501,7 +501,7 @@ export type ScanParams = {
   corpus: string;
   out: string;
   /**
-   * 用数据文件夹 `dicts\` 里的哪几个词库，**按顺序、第一个是主词库**。
+   * 用数据文件夹 `dicts\` 里的哪几个词典，**按顺序、第一个是主词典**。
    *
    * 空数组 = 「目录里全部 `.dict`，按文件名排序」。顺序会影响同名条目的覆盖结果，
    * 所以界面上的顺序是有意义的，不是随便排的。
@@ -554,9 +554,9 @@ export type LogLevel = 'info' | 'warn' | 'error' | 'debug' | string;
  *   - `coverage`：按累计覆盖率（用 tier_curve 反解成排名）
  *   - `even`：按词条数七等分
  *
- * 默认是前% 而不是绝对排名：排名绝对值只在**同一张表内**可比。分域表只有几万条、
- * 全量表有几百万条，同一个绝对阈值套上去会让分域表整片挤进「极多」；而铺平之后
- * 任意作用域都能当主表，绝对阈值必然失真。
+ * 默认是前% 而不是绝对排名：排名绝对值只在**同一张表内**可比。表组只有几万条、
+ * 全量表有几百万条，同一个绝对阈值套上去会让表组整片挤进「极多」；而铺平之后
+ * 任意表组都能当主表，绝对阈值必然失真。
  */
 export type TierMethod = 'top_pct' | 'rank' | 'coverage' | 'even';
 
@@ -566,14 +566,14 @@ export const TIER_COUNT = 7;
 export const TIER_BOUND_COUNT = TIER_COUNT - 1;
 
 /**
- * 词表默认的 6 个前%上界（0..100）。
+ * 词频表默认的 6 个前%上界（0..100）。
  *
  * 与 Rust 侧 `rank::DEFAULT_TIER_PCT` **必须一致**。数值不是新拍的：它们是把旧的
- * 绝对排名默认值（100/1000/5000/20000/50000/150000）放在实测的 380 万条全库词表上
+ * 绝对排名默认值（100/1000/5000/20000/50000/150000）放在实测的 380 万条全库词频表上
  * 换算出来的，所以换成前%之后色阶观感与从前基本一致。
  */
 export const DEFAULT_WORD_TIER_PCT = [0.0026, 0.026, 0.132, 0.526, 1.32, 3.95];
-/** 字表默认的 6 个前%上界（字表只有约 1.9 万字，套词表那套会全部挤进头两档） */
+/** 字表默认的 6 个前%上界（字表只有约 1.9 万字，套词频表那套会全部挤进头两档） */
 export const DEFAULT_CHAR_TIER_PCT = [0.26, 1.05, 3.16, 7.89, 15.8, 26.3];
 
 export function defaultTierPct(kind: 'word' | 'char'): number[] {
@@ -588,7 +588,7 @@ export function isTierMethod(value: unknown): value is TierMethod {
 export type Settings = {
   corpusDir: string | null;
   /**
-   * **数据文件夹**：里面是 `dicts\`（词库库）与 `tables\`（词表库）两个子目录。
+   * **数据文件夹**：里面是 `dicts\`（词典库）与 `tables\`（词频表库）两个子目录。
    *
    * ⚠ 语义变过一次：从前它直接指向**一个词频表产物目录**（那目录里就有
    * `meta.json`）。老设置会在启动时被后端识别出来、转成一张「已注册的表」。
@@ -600,6 +600,11 @@ export type Settings = {
   popupOpacity: number;
   popupAlwaysOnTop: boolean;
   popupAutoCloseMs: number;
+  /**
+   * **预留**：关闭主窗口时收进系统托盘而非退出应用。当前固定为 `true`，
+   * 设置页尚未提供开关；此字段仅保持前后端契约一致，暂不改写。
+   */
+  closeToTray: boolean;
   theme: string;
   /**
    * 界面语言（BCP 47 形式，例如 `zh-CN`）。
@@ -614,7 +619,7 @@ export type Settings = {
   keepLatin: boolean;
   skipSingleChar: boolean;
   /**
-   * 扫描用哪条词库链：`dicts\` 下的**文件名**，按顺序、**第一个是主词库**。
+   * 扫描用哪条词典链：`dicts\` 下的**文件名**，按顺序、**第一个是主词典**。
    *
    * `null` 或空数组 = 用数据文件夹里全部 `.dict`（按文件名排序）。
    * 存文件名而不是绝对路径：数据文件夹是可以搬走的，文件名不会因此失效。
@@ -623,7 +628,7 @@ export type Settings = {
   /**
    * **v1 兼容、已废弃**：从前那个「叠加用户词典」的单个绝对路径。
    *
-   * 现在词库是数据文件夹里的条目、在扫描时勾选（见 `scanDicts`）。后端只在读老
+   * 现在词典是数据文件夹里的条目、在扫描时勾选（见 `scanDicts`）。后端只在读老
    * 设置时才有这个字段，迁移时会把它并进 `scanDicts` 并置空。前端**不再写它**。
    */
   userDict?: string | null;
@@ -634,25 +639,25 @@ export type Settings = {
   minCount: number;
   skipDomainTables: boolean;
   /**
-   * **主作用域**：决定"这个词/字有多常见"的那一张表。
+   * **主表组**：决定"这个词/字有多常见"的那一张表。
    *
-   * 现在所有作用域完全平等（`full` 只是"全部相加"的那一个），这个设置是唯一的
-   * 特权：划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余作用域只做
-   * 对比。存的是**纯作用域名**（`full`、`news`、`相加：财经`）。
+   * 现在所有表组完全平等（`full` 只是"全部相加"的那一个），这个设置是唯一的
+   * 特权：划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表组只做
+   * 对比。存的是**纯表组名**（`full`、`news`、`相加：财经`）。
    *
-   * `null` / 空串 = 用 `full`；产物里没有 `full` 就用排序后的第一个作用域。
+   * `null` / 空串 = 用 `full`；产物里没有 `full` 就用排序后的第一个表组。
    */
   primaryScope?: string | null;
   /**
-   * **已废弃**：从前用它挑"参与分域对比与排行榜"的表。
+   * **已废弃**：从前用它挑"参与表组对比与排行榜"的表。
    *
-   * 铺平之后不需要了（任何作用域都能当主表、都能相加，对比列表也一律全给）。
+   * 铺平之后不需要了（任何表组都能当主表、都能相加，对比列表也一律全给）。
    * 留着只是为了读得进老设置文件，**不再有任何行为**。
    */
   enabledTables: string[] | null;
   /** 分组方法，默认 `'top_pct'`（按前%） */
   tierMethod: TierMethod;
-  /** 自定义词表阈值：6 个排名上界；null = 用 meta 里的默认值 */
+  /** 自定义词频表阈值：6 个排名上界；null = 用 meta 里的默认值 */
   tierWordBounds: number[] | null;
   /** 自定义字表阈值：同上 */
   tierCharBounds: number[] | null;
@@ -702,9 +707,9 @@ export type LeaderboardRow = {
 
 /** `invoke('compose_tables', { params })` 的参数 */
 export type ComposeParams = {
-  /** 源表身份（`作用域/类型`），至少一个 */
+  /** 源表身份（`表组/类型`），至少一个 */
   sources: string[];
-  /** 新作用域的名字（会变成同一份产物里的另一个作用域目录） */
+  /** 新表组的名字（会变成同一份产物里的另一个表组目录） */
   scope: string;
   /** 只要这一类；不给 = 源表里出现过的每一类都相加 */
   kind?: string | null;

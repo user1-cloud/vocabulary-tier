@@ -7,8 +7,8 @@
   测试时经常需要「直接把某份产物目录指上去」或「把数据文件夹换到别处」，
   而不是每次都在界面里点一遍；设置被填坏之后也需要一键复位。这个脚本干这些事。
 
-  ⚠ 两种"目录"别搞混（词库外置那次改动之后才分开的）：
-    -DataFolder  数据文件夹：里面是 dicts\（词库）与 tables\（词表）两个子目录
+  ⚠ 两种"目录"别搞混（词典外置那次改动之后才分开的）：
+    -DataFolder  数据文件夹：里面是 dicts\（词典）与 tables\（词频表）两个子目录
     -TableDir    一份**产物目录**：目录里直接就有 meta.json + full\*.vfr，
                  用于指向数据文件夹之外的既有产物（例如仓库里的 data\）
   从前那个把产物目录写进 dataDir 的用法已经不对了：dataDir 现在是数据文件夹。
@@ -45,7 +45,7 @@ param(
     [Parameter(ParameterSetName = 'Set')]
     [string]$Hotkey,
 
-    # 已废弃：词库现在必须是数据文件夹 dicts\ 下的 .dict 条目。保留这个参数只为给出一句提示。
+    # 已废弃：词典现在必须是数据文件夹 dicts\ 下的 .dict 条目。保留这个参数只为给出一句提示。
     [Parameter(ParameterSetName = 'Set')]
     [string]$UserDict,
 
@@ -63,7 +63,7 @@ $cfgFile = Join-Path $cfgDir 'settings.json'
 if ($Reset) {
     if (Test-Path $cfgFile) {
         Remove-Item $cfgFile -Force
-        Write-Host "已删除 $cfgFile（应用下次启动会用默认设置；数据文件夹里的词库/词表不受影响）"
+        Write-Host "已删除 $cfgFile（应用下次启动会用默认设置；数据文件夹里的词典/词频表不受影响）"
     } else {
         Write-Host "设置文件本来就不存在：$cfgFile"
     }
@@ -148,8 +148,8 @@ if ($TableDir) {
     if (-not (Test-Path (Join-Path $TableDir 'meta.json'))) {
         throw @"
 该目录下没有 meta.json，不是 vocfreq 的产物目录：$TableDir
-先跑一次：vocfreq scan --corpus <语料库> --dict <词库> --out $TableDir
-（词库现在必须显式指定，见 docs\DATA_LAYOUT.md）
+先跑一次：vocfreq scan --corpus <语料库> --dict <词典> --out $TableDir
+（词典现在必须显式指定，见 docs\DATA_LAYOUT.md）
 "@
     }
     $settings['activeTablePath'] = (Resolve-Path $TableDir).Path
@@ -167,7 +167,7 @@ if ($UserDict) {
 -UserDict 已废弃，本次**没有写入**。
 自定义词典现在是数据文件夹 dicts\ 下的一个 .dict 条目，在扫描时勾选。
 要手动放一份进去的话：
-    Copy-Item "$((Resolve-Path $UserDict).Path)" (Join-Path '$($settings['dataDir'] ?? '<数据文件夹>')' 'dicts\我的词库.dict')
+    Copy-Item "$((Resolve-Path $UserDict).Path)" (Join-Path '$($settings['dataDir'] ?? '<数据文件夹>')' 'dicts\我的词典.dict')
 （注意扩展名必须是 .dict，内容为 jieba 的「词 词频 词性」）
 "@
 }

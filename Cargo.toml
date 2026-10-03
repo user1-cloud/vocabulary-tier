@@ -14,10 +14,10 @@ repository = "https://github.com/local/VocTier"
 # include-flate 以 zstd 压进**每个**链接了本库的二进制里，同时拖进 zstd-sys 这个
 # 带 C 代码的依赖（见 tools/build-desktop.ps1 里为它写的 TEMP 绕行）。
 #
-# 现在词库是数据文件夹里的一份普通文件（用户可增删替换），由 `vocfreq_core::dict`
+# 现在词典是数据文件夹里的一份普通文件（用户可增删替换），由 `vocfreq_core::dict`
 # 负责读取、校验与装载，命令行与桌面端走的是同一条路径。
 jieba-rs = { version = "0.11", default-features = false }
-# 词库内容指纹（写进 meta.json 的 `DictRef.sha256`），用来判断"这张表是基于哪份词库生成的"。
+# 词典内容指纹（写进 meta.json 的 `DictRef.sha256`），用来判断"这张表是基于哪份词典生成的"。
 # 不是安全用途，但要求跨版本稳定 —— 所以不能用 std 的 DefaultHasher（它不保证跨版本一致）。
 sha2 = "0.10"
 rayon = "1"

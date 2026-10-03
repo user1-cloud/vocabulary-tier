@@ -1,21 +1,21 @@
-//! 词库（jieba 格式词典文件）的读取、校验、内容指纹与装载。
+//! 词典（jieba 格式词典文件）的读取、校验、内容指纹与装载。
 //!
-//! 词库从「编进 exe 的常量」变成了「数据文件夹里的一份普通文件」，于是这个模块
+//! 词典从「编进 exe 的常量」变成了「数据文件夹里的一份普通文件」，于是这个模块
 //! 要承担三件 jieba-rs 自己不管的事：
 //!
 //! 1. **跳过注释与空行**。jieba 的 `load_dict` 会把 `#` 开头的行也当词条解析：
 //!    第二列不是整数就返回 `InvalidDictEntry` 直接失败；若第二列恰好是数字，
 //!    则会把 `#` 本身当成一个词静默插进词典。而本项目的 [`crate::artifact::write_oov`]
 //!    产出的候选词文件正带着 `#` 注释头，文档还明确要求用户拿它去喂用户词典 ——
-//!    所以这条路径必须由我们自己处理注释。词库现在用户可编辑，注释只会更多。
+//!    所以这条路径必须由我们自己处理注释。词典现在用户可编辑，注释只会更多。
 //!
 //! 2. **整份先校验、再装载**。jieba 的 `load_dict` 一进门就把 `total` 归零，
 //!    中途出错又**不会**走 `finish_load()`，于是分词器会停在「半装载」状态
 //!    （`total` 与 `log_total` 打架、部分词已进 trie）。这里先把文件完整读进内存、
 //!    逐行校验，确认全文件无误后才喂给 jieba，因此不存在加载到一半的中间态。
 //!
-//! 3. **内容指纹**。词库一旦可由用户替换、删除、自建，`meta.json` 里就必须记住
-//!    「这张表是基于哪一份词库生成的」（见 [`DictRef`]）。否则用户换了词库再去查
+//! 3. **内容指纹**。词典一旦可由用户替换、删除、自建，`meta.json` 里就必须记住
+//!    「这张表是基于哪一份词典生成的」（见 [`DictRef`]）。否则用户换了词典再去查
 //!    旧表，会静默拿到系统性偏错的频次 —— 正是本项目在别处极力避免的那类错误。
 //!
 //! 顺带一个语义选择：jieba 的 `load_dict` 把**省略词频**的条目按 `0` 处理，而
@@ -39,14 +39,14 @@ use crate::{Error, Result};
 /// sha256 十六进制串的长度。
 pub const SHA256_HEX_LEN: usize = 64;
 
-/// 词库文件的扩展名。数据文件夹里只认这个后缀，避免把 README 之类也当词库。
+/// 词典文件的扩展名。数据文件夹里只认这个后缀，避免把 README 之类也当词典。
 pub const DICT_EXT: &str = "dict";
 
 // ===========================================================================
-// 词库身份
+// 词典身份
 // ===========================================================================
 
-/// 一份词库的身份，写进 `meta.json`。
+/// 一份词典的身份，写进 `meta.json`。
 ///
 /// **序列化永远写成对象**，但反序列化额外接受一个纯字符串 —— 那是
 /// `schema_version = 1` 的老产物写法，例如
@@ -54,8 +54,8 @@ pub const DICT_EXT: &str = "dict";
 /// 无从校验，只能降级成「有名字但不可验证」，见 [`DictRef::legacy`]。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DictRef {
-    /// 稳定标识。当前实现取文件名去掉 `.dict`（中文名照留），同一名字的词库靠
-    /// `sha256` 区分。**写进产物后不要改名**，它是表与词库之间的人可读连接键。
+    /// 稳定标识。当前实现取文件名去掉 `.dict`（中文名照留），同一名字的词典靠
+    /// `sha256` 区分。**写进产物后不要改名**，它是表与词典之间的人可读连接键。
     pub id: String,
     /// 展示名（默认同 [`Self::id`]）。
     pub name: String,
@@ -64,7 +64,7 @@ pub struct DictRef {
     pub path: String,
     /// 实际装载的**有效**词条数（已剔除注释与空行）。
     pub entries: u64,
-    /// 词库文件内容的 sha256（小写十六进制）。
+    /// 词典文件内容的 sha256（小写十六进制）。
     ///
     /// `schema_version = 1` 的老产物为空串 —— 用 [`Self::is_verifiable`] 判断。
     pub sha256: String,
@@ -73,7 +73,7 @@ pub struct DictRef {
 impl DictRef {
     /// `schema_version = 1` 的老产物只有一句自由文本标签，没有指纹。
     ///
-    /// 这种身份**不可校验**：读取方必须降级成「不知道对应哪份词库」并继续工作，
+    /// 这种身份**不可校验**：读取方必须降级成「不知道对应哪份词典」并继续工作，
     /// 而不是报错 —— 老产物本身是完全合法的，只是当年没有这个概念。
     pub fn legacy(label: &str) -> Self {
         DictRef {
@@ -90,10 +90,10 @@ impl DictRef {
         self.sha256.len() == SHA256_HEX_LEN
     }
 
-    /// 两份词库的内容是否相同。
+    /// 两份词典的内容是否相同。
     ///
     /// 返回 `None` 表示**不可判定**（任一方没有指纹）。调用方不能用 `false` 顶替
-    /// `None`：老产物跟任何词库都"不可判定"，报成"不一致"会让所有老产物一起报错。
+    /// `None`：老产物跟任何词典都"不可判定"，报成"不一致"会让所有老产物一起报错。
     pub fn same_content(&self, other: &DictRef) -> Option<bool> {
         if !self.is_verifiable() || !other.is_verifiable() {
             return None;
@@ -101,7 +101,7 @@ impl DictRef {
         Some(self.sha256.eq_ignore_ascii_case(&other.sha256))
     }
 
-    /// 展示用短描述：`预制词库（349046 条 / a1b2c3d4）`。
+    /// 展示用短描述：`预制词典（349046 条 / a1b2c3d4）`。
     pub fn short(&self) -> String {
         if !self.is_verifiable() {
             return format!("{}（{} 条 / 无指纹）", self.name, self.entries);
@@ -164,7 +164,7 @@ pub struct DictEntry {
     pub tag: String,
 }
 
-/// 读取一份词库时的统计。界面用它提示「这份词库有 N 条没写词频」之类的隐患。
+/// 读取一份词典时的统计。界面用它提示「这份词典有 N 条没写词频」之类的隐患。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct DictLoadReport {
     /// 有效词条数
@@ -182,7 +182,7 @@ pub struct DictLoadReport {
     pub freq_zero: u64,
 }
 
-/// 一份词库读进来的全部结果。
+/// 一份词典读进来的全部结果。
 #[derive(Debug, Clone)]
 pub struct ReadDict {
     pub entries: Vec<DictEntry>,
@@ -194,9 +194,9 @@ pub struct ReadDict {
 // 读取与校验
 // ===========================================================================
 
-/// 读取并校验一份词库。
+/// 读取并校验一份词典。
 ///
-/// 文件**只读一遍**：先整个读进内存（词库是几 MB 量级），据此算指纹，再按行解析。
+/// 文件**只读一遍**：先整个读进内存（词典是几 MB 量级），据此算指纹，再按行解析。
 ///
 /// 格式规则（比 jieba 自己宽松，但**不静默**）：
 /// * 以 `#` 开头的**整行**是注释。行内出现的 `#` 不算注释。
@@ -209,10 +209,10 @@ pub struct ReadDict {
 ///   jieba 会静默忽略第三列之后的内容，用户会以为词加进去了，其实没有。
 pub fn read_dict(path: &Path) -> Result<ReadDict> {
     let bytes = std::fs::read(path)
-        .map_err(|e| Error::Dict(format!("打开词库 {} 失败: {e}", path.display())))?;
+        .map_err(|e| Error::Dict(format!("打开词典 {} 失败: {e}", path.display())))?;
 
     let sha256 = sha256_hex(&bytes);
-    // 词库理论上可以有非 UTF-8 的脏字节；这里宽容处理，坏字节按替换字符走，
+    // 词典理论上可以有非 UTF-8 的脏字节；这里宽容处理，坏字节按替换字符走，
     // 后续解析会因为列数/词频不合法而报出具体行号，好过整份读不了。
     let text = String::from_utf8_lossy(&bytes);
 
@@ -287,21 +287,21 @@ pub fn read_dict(path: &Path) -> Result<ReadDict> {
     })
 }
 
-/// 词库的展示名 = 文件名去掉 `.dict`。
+/// 词典的展示名 = 文件名去掉 `.dict`。
 pub fn display_name(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// 一个路径是不是词库文件（只看扩展名，大小写不敏感）。
+/// 一个路径是不是词典文件（只看扩展名，大小写不敏感）。
 pub fn is_dict_file(path: &Path) -> bool {
     path.extension()
         .map(|e| e.eq_ignore_ascii_case(DICT_EXT))
         .unwrap_or(false)
 }
 
-/// 列出一个目录里的词库文件，按文件名排序。
+/// 列出一个目录里的词典文件，按文件名排序。
 ///
 /// 排序是为了让「把文件扔进文件夹就生效」这件事**可复现** —— 顺序不同，
 /// 同名条目的覆盖结果就不同。目录不存在时返回空表（不是错误：数据文件夹
@@ -359,7 +359,7 @@ fn to_hex(bytes: &[u8]) -> String {
 ///
 /// 两条路径，按「这份文件有没有省略词频」来选：
 ///
-/// * **全部写了词频**（常见情况，包括内置那份 349,046 条的词库）→ 拼成
+/// * **全部写了词频**（常见情况，包括内置那份 349,046 条的词典）→ 拼成
 ///   `词 词频 词性` 文本，一次 `load_dict` 装入。与 jieba 自己的 `finish_load`
 ///   语义完全一致，也最快。
 /// * **有省略词频的条目** → 逐条 [`Jieba::add_word`]，省略词频的交给 `suggest_freq`
@@ -367,7 +367,7 @@ fn to_hex(bytes: &[u8]) -> String {
 ///   已经有什么」，重排会让同一份文件得出不同结果，破坏可复现性。
 ///
 /// 同名条目**后者覆盖前者的词频**（jieba `load_dict` 的既有语义：已存在的词只改
-/// 词频，不新增记录）。所以词库链的顺序有意义。
+/// 词频，不新增记录）。所以词典链的顺序有意义。
 pub fn install(jieba: &mut Jieba, entries: &[DictEntry]) -> Result<()> {
     let has_omitted = entries.iter().any(|e| e.freq.is_none());
 
@@ -383,7 +383,7 @@ pub fn install(jieba: &mut Jieba, entries: &[DictEntry]) -> Result<()> {
         }
         jieba
             .load_dict(&mut Cursor::new(buf.as_bytes()))
-            .map_err(|e| Error::Dict(format!("装载词库失败: {e}")))?;
+            .map_err(|e| Error::Dict(format!("装载词典失败: {e}")))?;
     } else {
         for e in entries {
             let tag = if e.tag.is_empty() {
@@ -397,7 +397,7 @@ pub fn install(jieba: &mut Jieba, entries: &[DictEntry]) -> Result<()> {
     Ok(())
 }
 
-/// 按给定顺序装载一整条词库链，返回每个成员的身份与读取报告。
+/// 按给定顺序装载一整条词典链，返回每个成员的身份与读取报告。
 ///
 /// `jieba` 应当从 [`Jieba::empty`] 开始 —— 现在已经没有"内置词典"这回事了。
 pub fn load_chain(jieba: &mut Jieba, paths: &[PathBuf]) -> Result<Vec<(DictRef, DictLoadReport)>> {
@@ -413,7 +413,7 @@ pub fn load_chain(jieba: &mut Jieba, paths: &[PathBuf]) -> Result<Vec<(DictRef, 
 /// 把整条链的身份压缩成一句给日志/界面看的话。
 pub fn describe_chain(chain: &[DictRef]) -> String {
     match chain.len() {
-        0 => "（无词库）".to_string(),
+        0 => "（无词典）".to_string(),
         1 => chain[0].short(),
         _ => {
             let names: Vec<&str> = chain.iter().map(|d| d.name.as_str()).collect();
@@ -422,9 +422,9 @@ pub fn describe_chain(chain: &[DictRef]) -> String {
     }
 }
 
-/// 测试用的临时词库文件。
+/// 测试用的临时词典文件。
 ///
-/// 放在这里供 `dict` 与 `tokenize` 两个测试模块共用 —— 两个模块都需要"造一份小词库"，
+/// 放在这里供 `dict` 与 `tokenize` 两个测试模块共用 —— 两个模块都需要"造一份小词典"，
 /// 各自抄一遍容易走样。
 #[cfg(test)]
 pub(crate) mod testutil {
@@ -447,9 +447,9 @@ pub(crate) mod testutil {
                 "vocfreq-test-{}-{seq}-{name}.dict",
                 std::process::id()
             ));
-            let mut f = std::fs::File::create(&p).expect("建临时词库");
-            f.write_all(body.as_bytes()).expect("写临时词库");
-            f.flush().expect("刷临时词库");
+            let mut f = std::fs::File::create(&p).expect("建临时词典");
+            f.write_all(body.as_bytes()).expect("写临时词典");
+            f.flush().expect("刷临时词典");
             TempDict(p)
         }
 
@@ -478,7 +478,7 @@ mod tests {
             "comments",
             "# 这是注释\n\n# 词频列不是数字也不该报错\n對 731971\n業 620532\n\n",
         );
-        let rd = read_dict(f.path()).expect("带注释的词库必须能读");
+        let rd = read_dict(f.path()).expect("带注释的词典必须能读");
         assert_eq!(rd.entries.len(), 2, "只应剩两条真词条");
         assert_eq!(rd.entries[0].word, "對");
         assert_eq!(rd.entries[0].freq, Some(731971));
@@ -492,13 +492,13 @@ mod tests {
         // 这是**刻意的取舍**：`#` 开头的整行一律当注释。
         //
         // 好处：artifact::write_oov 产出的候选词文件开头有 10 行 `#` 注释（而文档
-        // 明确要求用户拿它去喂词库），用户手写的注释也能直接用。
-        // 代价：**以 `#` 开头的词无法在词库里表达**，比如微博话题词 `#话题`。
+        // 明确要求用户拿它去喂词典），用户手写的注释也能直接用。
+        // 代价：**以 `#` 开头的词无法在词典里表达**，比如微博话题词 `#话题`。
         //
         // 两害相权：注释的 `#` 后面不带空格很常见，而词以 `#` 开头很罕见 ——
         // 所以宁可让前者工作。真要收录这类词，只能改写清洗规则去掉前导 `#`。
         let f = TempDict::new("hashline", "#话题 100 n\n# 真注释\n甲 5\n");
-        let rd = read_dict(f.path()).expect("读词库");
+        let rd = read_dict(f.path()).expect("读词典");
         let words: Vec<&str> = rd.entries.iter().map(|e| e.word.as_str()).collect();
         assert_eq!(words, vec!["甲"], "`#` 开头的行应全部当注释丢掉");
         assert_eq!(rd.report.comments, 2);
@@ -555,9 +555,9 @@ mod tests {
         // 回归：jieba 的 load_dict 把省略词频当 0，于是该词 has_word 为真
         // 却永远切不出来。我们改走 add_word/suggest_freq，它必须真能成词。
         let f = TempDict::new("seg", "元宇宙\n");
-        let rd = read_dict(f.path()).expect("读词库");
+        let rd = read_dict(f.path()).expect("读词典");
         let mut jieba = Jieba::empty();
-        install(&mut jieba, &rd.entries).expect("装词库");
+        install(&mut jieba, &rd.entries).expect("装词典");
         assert!(jieba.has_word("元宇宙"), "应登记进词典");
         let toks: Vec<&str> = jieba
             .cut("元宇宙概念", false)
@@ -579,7 +579,7 @@ mod tests {
             &mut jieba,
             &[a.path().to_path_buf(), b.path().to_path_buf()],
         )
-        .expect("装词库链");
+        .expect("装词典链");
         assert_eq!(chain.len(), 2);
         // 后者覆盖前者：把「苹果」整成一个词的倾向应当变得很强
         let toks: Vec<&str> = jieba.cut("苹果", false).iter().map(|t| t.word).collect();
@@ -630,7 +630,7 @@ mod tests {
         for (n, body) in [
             ("b.dict", "甲 1\n"),
             ("a.dict", "乙 1\n"),
-            ("readme.txt", "不是词库\n"),
+            ("readme.txt", "不是词典\n"),
         ] {
             std::fs::write(dir.join(n), body).unwrap();
         }

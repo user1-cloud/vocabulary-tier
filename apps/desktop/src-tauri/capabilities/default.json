@@ -19,6 +19,7 @@
     "core:window:allow-inner-size",
     "core:event:default",
     "core:webview:default",
+    "core:tray:default",
     "dialog:default",
     "opener:default",
     "global-shortcut:default"

@@ -2,15 +2,15 @@
 //!
 //! ## 为什么这在数学上是精确的
 //!
-//! `scan` 本身就是**逐作用域扫完、再累加进全量作用域**（见 `scan.rs` 的
-//! `overall.merge(&counts)`）。每个 token 只属于一个作用域，所以
+//! `scan` 本身就是**逐表组扫完、再累加进全量表组**（见 `scan.rs` 的
+//! `overall.merge(&counts)`）。每个 token 只属于一个表组，所以
 //!
 //! ```text
-//! full.count(词) == Σ 各作用域.count(词)          （逐条相等，不是近似）
-//! full.total_tokens == Σ 各作用域.total_tokens
+//! full.count(词) == Σ 各表组.count(词)          （逐条相等，不是近似）
+//! full.total_tokens == Σ 各表组.total_tokens
 //! ```
 //!
-//! `compose_equal_to_full_scan` 这条测试就是拿扫描产出的分域表相加、与扫描产出的
+//! `compose_equal_to_full_scan` 这条测试就是拿扫描产出的表组相加、与扫描产出的
 //! `full` 表逐条比对来钉这件事的。
 //!
 //! 前提是**低频过滤阈值要跟着走**：源表各自按 `min_count` 丢过一批词，相加方必须
@@ -18,11 +18,11 @@
 //!
 //! ## 源表可以来自多份产物
 //!
-//! 全量语料大到一块盘放不下时，只能一份产物一个域地扫，最后再合起来（见
+//! 全量语料大到一块盘放不下时，只能一份产物一个表组地扫，最后再合起来（见
 //! [`crate::merge`]）。所以相加的源表**允许跨产物**，代价是必须先过一道硬门槛：
-//! 所有源产物的词库链与分词口径必须**完全一致**（[`check_mergeable`]）。
+//! 所有源产物的词典链与分词口径必须**完全一致**（[`check_mergeable`]）。
 //!
-//! 反过来，相加**永远不合并词库链** —— 不一致就拒绝，绝不静默凑一份。
+//! 反过来，相加**永远不合并词典链** —— 不一致就拒绝，绝不静默凑一份。
 //!
 //! ## 落地方式
 //!
@@ -48,21 +48,21 @@ use crate::{Error, Result};
 /// 一次相加请求。
 #[derive(Debug, Clone)]
 pub struct ComposeSpec {
-    /// 源产物目录（新作用域默认也写回这里）
+    /// 源产物目录（新表组默认也写回这里）
     pub from: std::path::PathBuf,
     /// **额外的**源产物目录。
     ///
-    /// 全量语料大到一块盘放不下时，只能一份产物一个域地扫，最后再把几份产物里的
-    /// 作用域加在一起 —— 所以相加允许跨产物。代价是必须先过 [`check_mergeable`]
-    /// 那道硬门槛：全部产物（含 [`Self::from`]）的词库链与分词口径必须完全一致。
+    /// 全量语料大到一块盘放不下时，只能一份产物一个表组地扫，最后再把几份产物里的
+    /// 表组加在一起 —— 所以相加允许跨产物。代价是必须先过 [`check_mergeable`]
+    /// 那道硬门槛：全部产物（含 [`Self::from`]）的词典链与分词口径必须完全一致。
     pub products: Vec<std::path::PathBuf>,
     /// 源表身份，形如 `full/word`、`news/char`
     pub sources: Vec<String>,
-    /// 新作用域名（会变成目录名，内部会洗一遍）
+    /// 新表组名（会变成目录名，内部会洗一遍）
     pub scope: String,
     /// 只要这一类；`None` = 源表里出现过的每一类都相加
     pub kind: Option<String>,
-    /// 输出目录。`None` = 写回 `from`（新作用域成为同一张产物里的另一张表）
+    /// 输出目录。`None` = 写回 `from`（新表组成为同一张产物里的另一张表）
     pub out: Option<std::path::PathBuf>,
 }
 
@@ -87,10 +87,10 @@ pub struct ComposedTable {
 /// 380 万词的表实测也在秒级）。
 pub const COPY_AS_IS_LIMIT: u64 = 8 * 1024 * 1024;
 
-/// 把若干词表按词相加。
+/// 把若干词频表按词相加。
 ///
 /// 标记位（`in_dict` / `from_user`）取**或**：它们本来是分词器的性质而不是语料的
-/// 性质，跨产物相加时也已经校验过词库链一致，或起来只是为了不丢位。
+/// 性质，跨产物相加时也已经校验过词典链一致，或起来只是为了不丢位。
 fn merge_words(
     table_sources: &BTreeMap<String, (usize, &TableRef)>,
     sources: &[String],
@@ -102,7 +102,7 @@ fn merge_words(
         let (_, t) = table_of(table_sources, key)?;
         if t.kind != "word" {
             return Err(Error::Other(format!(
-                "{key} 是 {} 表，不能和词表相加",
+                "{key} 是 {} 表，不能和词频表相加",
                 t.kind
             )));
         }
@@ -186,11 +186,11 @@ fn table_of<'a>(
 
 /// **硬门槛**：这些产物能不能放在一起。
 ///
-/// 只做一件事 —— 逐字段校验 [`TokenizerMeta`]（词库链指纹 + 分词口径）在所有产物里
+/// 只做一件事 —— 逐字段校验 [`TokenizerMeta`]（词典链指纹 + 分词口径）在所有产物里
 /// **完全一致**，外加 `engine` / `version`。不一致就返回一条**指出哪一份产物、
 /// 哪个字段**不同的错误，绝不"挑一份当基准"。
 ///
-/// 为什么这是硬门槛：频次是**同一套切分规则下的计数**。跨产物相加/合流时若词库或
+/// 为什么这是硬门槛：频次是**同一套切分规则下的计数**。跨产物相加/合流时若词典或
 /// 分词口径不同，同一个词在不同源表里的频次来自不同的切分，加出来的排名自相矛盾，
 /// 而且没有任何办法事后看出来。宁可拒绝。
 ///
@@ -203,7 +203,7 @@ pub fn check_mergeable(products: &[&Dataset], labels: &[String]) -> Result<()> {
     debug_assert_eq!(products.len(), labels.len());
     // 先单独判"没有指纹"这一种：`dicts` 为空（schema v1 老产物）时逐份比对会得到
     // "两份都是空的、看起来一致"，而那是**假一致** —— 没有指纹就无从知道这两份产物
-    // 当年用的是不是同一份词库。合流的正确性完全依赖这件事，所以必须拒绝。
+    // 当年用的是不是同一份词典。合流的正确性完全依赖这件事，所以必须拒绝。
     let unverifiable: Vec<&str> = products
         .iter()
         .enumerate()
@@ -215,10 +215,10 @@ pub fn check_mergeable(products: &[&Dataset], labels: &[String]) -> Result<()> {
         .collect();
     if !unverifiable.is_empty() {
         return Err(Error::Other(format!(
-            "拒绝合流：这些产物**没有可校验的词库指纹**，无从确认它们用的是不是同一份词库。\n  {}\n\n\
+            "拒绝合流：这些产物**没有可校验的词典指纹**，无从确认它们用的是不是同一份词典。\n  {}\n\n\
              `meta.json` 的 `tokenizer.dicts[]` 必须逐份带 `sha256`。没有指纹时「两份都是空的」\
-             看着一致，其实什么也没说明 —— 合流的正确性完全依赖「同一份词库、同一套分词口径」。\n\
-             请用带指纹的词库重扫这些语料，再合流。",
+             看着一致，其实什么也没说明 —— 合流的正确性完全依赖「同一份词典、同一套分词口径」。\n\
+             请用带指纹的词典重扫这些语料，再合流。",
             unverifiable.join("\n  ")
         )));
     }
@@ -231,11 +231,11 @@ pub fn check_mergeable(products: &[&Dataset], labels: &[String]) -> Result<()> {
         return Ok(());
     }
     Err(Error::Other(format!(
-        "拒绝合流：这些产物的词库链 / 分词口径不一致。\n  {}\n\n\
-         频次是同一套切分规则下的计数。跨产物合计时若词库或分词口径不同，\
+        "拒绝合流：这些产物的词典链 / 分词口径不一致。\n  {}\n\n\
+         频次是同一套切分规则下的计数。跨产物合计时若词典或分词口径不同，\
          同一个词的频次会来自不同的切分，排名自相矛盾且事后无从察觉 —— 所以这里直接拒绝，\
          不会挑一份当基准、也不会静默合并。\n\
-         请用同一份词库、同一套分词选项重扫，或者只合流一致的那几份。",
+         请用同一份词典、同一套分词选项重扫，或者只合流一致的那几份。",
         diffs.join("\n  ")
     )))
 }
@@ -293,16 +293,16 @@ fn tok_engine_diffs(base: &TokenizerMeta, i: usize, other: &TokenizerMeta) -> Ve
     d
 }
 
-/// 比较整条词库链：**逐份、按内容指纹**。
+/// 比较整条词典链：**逐份、按内容指纹**。
 ///
 /// 指纹是唯一可靠的判据 —— `path` 换台机器就失效（出厂预置表刻意不记路径），
 /// `name` 是用户随手起的。之所以要逐份比而不是比一个"链的总指纹"：两份不同内容的
-/// 词库有可能被用户摆成同一个链，那样总指纹更不容易看出来（实测里就发生过）。
+/// 词典有可能被用户摆成同一个链，那样总指纹更不容易看出来（实测里就发生过）。
 fn dict_chain_diffs(base: &TokenizerMeta, i: usize, other: &TokenizerMeta) -> Vec<String> {
     let (a, b) = (base.resolved_dicts(), other.resolved_dicts());
     if a.len() != b.len() {
         return vec![format!(
-            "词库链长度: 第 1 份是 {} 份（{}）；第 {} 份是 {} 份（{}）",
+            "词典链长度: 第 1 份是 {} 份（{}）；第 {} 份是 {} 份（{}）",
             a.len(),
             dict_chain_label(&a),
             i + 1,
@@ -314,7 +314,7 @@ fn dict_chain_diffs(base: &TokenizerMeta, i: usize, other: &TokenizerMeta) -> Ve
     for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         if let Some(why) = dict_pair_mismatch(x, y) {
             d.push(format!(
-                "词库链第 {} 份（第 1 份「{}」/ 第 {} 份「{}」）: {why}",
+                "词典链第 {} 份（第 1 份「{}」/ 第 {} 份「{}」）: {why}",
                 k + 1,
                 x.name,
                 i + 1,
@@ -325,10 +325,10 @@ fn dict_chain_diffs(base: &TokenizerMeta, i: usize, other: &TokenizerMeta) -> Ve
     d
 }
 
-/// 两份词库记录是否指向同一份内容。`Some(原因)` = 对不上或不可判定。
+/// 两份词典记录是否指向同一份内容。`Some(原因)` = 对不上或不可判定。
 fn dict_pair_mismatch(x: &DictRef, y: &DictRef) -> Option<String> {
     match x.same_content(y) {
-        // 指纹（sha256）逐字节相等 —— 这才是"同一份词库"
+        // 指纹（sha256）逐字节相等 —— 这才是"同一份词典"
         Some(true) => None,
         Some(false) => Some(format!(
             "内容指纹不同：{} vs {}",
@@ -336,10 +336,10 @@ fn dict_pair_mismatch(x: &DictRef, y: &DictRef) -> Option<String> {
             short_sha(&y.sha256)
         )),
         // 没有指纹 = 无从校验。这不是"一致"，必须显式拒绝：
-        // 拿两份不知道是否相同的词库合流，等于把正确性赌在运气上。
+        // 拿两份不知道是否相同的词典合流，等于把正确性赌在运气上。
         None => Some(format!(
-            "没有内容指纹，无法校验两份词库是不是同一份（{} vs {}）。\
-             请用同一份词库重扫一遍再合流",
+            "没有内容指纹，无法校验两份词典是不是同一份（{} vs {}）。\
+             请用同一份词典重扫一遍再合流",
             sha_label(x),
             sha_label(y)
         )),
@@ -356,7 +356,7 @@ fn sha_label(d: &DictRef) -> String {
 
 fn dict_chain_label(ds: &[DictRef]) -> String {
     if ds.is_empty() {
-        return "空（没有记录任何词库）".into();
+        return "空（没有记录任何词典）".into();
     }
     ds.iter()
         .map(|d| d.name.clone())
@@ -401,12 +401,12 @@ pub fn compose(spec: &ComposeSpec) -> Result<Vec<ComposedTable>> {
     }
     let scope = artifact::sanitize_scope(&spec.scope);
     if scope.is_empty() {
-        return Err(Error::Other("作用域名不能为空".into()));
+        return Err(Error::Other("表组名不能为空".into()));
     }
 
     // 源产物：`from` 是那个"源产物目录"，`products` 是**额外**的产物目录(可空)。
-    // 全量语料大到一块盘放不下时只能一份产物一个域地扫，所以跨产物相加是常规路径，
-    // 不是例外 —— 但必须先过词库链/分词口径那一关。
+    // 全量语料大到一块盘放不下时只能一份产物一个表组地扫，所以跨产物相加是常规路径，
+    // 不是例外 —— 但必须先过词典链/分词口径那一关。
     let mut roots: Vec<PathBuf> = vec![spec.from.clone()];
     for p in &spec.products {
         if !roots.contains(p) {
@@ -426,19 +426,19 @@ pub fn compose(spec: &ComposeSpec) -> Result<Vec<ComposedTable>> {
         .zip(products.iter())
         .map(|(r, d)| describe_product(&r.display().to_string(), d))
         .collect();
-    // **硬门槛**：词库链 + 分词口径必须完全一致。不一致就到此为止，绝不出半截产物。
+    // **硬门槛**：词典链 + 分词口径必须完全一致。不一致就到此为止，绝不出半截产物。
     ensure_same_tokenizer(&products, &labels)?;
     let table_sources = table_sources(&products)?;
     let ds = first_ds(&products);
 
-    // 目标目录：`out` 不给就写回第一份源产物（新作用域成为同一份产物里的另一张表）
+    // 目标目录：`out` 不给就写回第一份源产物（新表组成为同一份产物里的另一张表）
     let out_root = spec.out.clone().unwrap_or_else(|| roots[0].clone());
     let out_dir = out_root.join(&scope);
     if out_dir.exists() {
         // 不覆盖：与 `library::import_dict` 的"永不覆盖"同一条原则。
         // 相加是一次可能跑几分钟、写几百 MB 的操作，悄悄盖掉用户已有的表代价太大。
         return Err(Error::Other(format!(
-            "{} 已经存在了。换一个作用域名，或先把旧的那张删掉。",
+            "{} 已经存在了。换一个表组名，或先把旧的那张删掉。",
             out_dir.display()
         )));
     }
@@ -455,7 +455,7 @@ pub fn compose(spec: &ComposeSpec) -> Result<Vec<ComposedTable>> {
         .any(|p| p.meta.table(&scope, "word").is_some() || p.meta.table(&scope, "char").is_some())
     {
         return Err(Error::Other(format!(
-            "作用域「{scope}」在这些产物里已经有一张表了，换一个名字"
+            "表组「{scope}」在这些产物里已经有一张表了，换一个名字"
         )));
     }
 
@@ -509,7 +509,7 @@ pub fn compose(spec: &ComposeSpec) -> Result<Vec<ComposedTable>> {
     // 写去别的目录时，先把源产物（meta + 全部表）搬过去：只搬新加出来的那一张，
     // 得到的是一个"有表却查不到词"的半截产物（它引用的其它表都不在）。
     //
-    // ⚠ 顺序是「先搬、再建新作用域目录」。反过来会在新作用域目录里塞进源表的
+    // ⚠ 顺序是「先搬、再建新表组目录」。反过来会在新表组目录里塞进源表的
     // `.vfr`（`copy_product` 是整目录铺的），虽然紧接着就会被覆写，但那几秒里
     // 目录处于自相矛盾的状态，进程被中断时留下的就是一份坏产物。
     let copying = roots.iter().any(|r| r != &out_root);
@@ -565,11 +565,11 @@ pub fn compose(spec: &ComposeSpec) -> Result<Vec<ComposedTable>> {
         });
     }
 
-    // 更新 meta.json：把新作用域的表挂进去。
+    // 更新 meta.json：把新表组的表挂进去。
     //
     // `domains` / `totals` / `tables` 必须**先合并全部源产物**：跨产物相加时目标目录
     // 里放着几份产物的表，meta 只写第一份的话，别的表就成了"磁盘上有、meta 里没有"
-    // 的孤儿（`Dataset::open` 打不开）。已知一致的是词库链与分词口径（上面校验过），
+    // 的孤儿（`Dataset::open` 打不开）。已知一致的是词典链与分词口径（上面校验过），
     // 语料切片清单则是**并起来**才算如实描述。
     let mut meta = merge_meta(&opened);
     for c in &written {
@@ -604,7 +604,7 @@ fn first_ds<'a>(products: &[&'a Dataset]) -> &'a Dataset {
 ///
 /// 一份表只能属于一份产物：`Dataset::open` 的校验保证 `meta.tables` 与磁盘上的
 /// `.vfr` 一一对应，所以这里不会出现"同一个 key 在两份产物里都有"的歧义
-/// ——它正是跨产物合流要挡的那个**作用域撞名**，在 [`crate::merge`] 里被拒绝。
+/// ——它正是跨产物合流要挡的那个**表组撞名**，在 [`crate::merge`] 里被拒绝。
 fn table_sources<'a>(products: &[&'a Dataset]) -> Result<BTreeMap<String, (usize, &'a TableRef)>> {
     let mut out: BTreeMap<String, (usize, &'a TableRef)> = BTreeMap::new();
     for (i, ds) in products.iter().enumerate() {
@@ -690,8 +690,8 @@ fn merge_meta(opened: &[Dataset]) -> Meta {
 
 /// 把源产物里**已经存在的**表全部复制到目标目录。
 ///
-/// 相加写去别处时必须做这一步：新表只是同一份产物里的又一个作用域，产物本身
-/// （`meta.json` + 各作用域的 `.vfr`）得先完整存在，否则新表引用的其它表都不在，
+/// 相加写去别处时必须做这一步：新表只是同一份产物里的又一个表组，产物本身
+/// （`meta.json` + 各表组的 `.vfr`）得先完整存在，否则新表引用的其它表都不在，
 /// 那个目录是打不开的。
 ///
 /// `scope/` 已经由调用方判过"不存在"，这里不会碰它。
@@ -720,7 +720,7 @@ fn copy_product(
 
 /// 从 `by_kind` 里取某一类的前%上界。
 fn tier_pct_of(by_kind: &BTreeMap<String, Vec<String>>, kind: &str) -> Vec<f64> {
-    // 有这一类就按这一类的默认值；没有（不该发生）退回词表默认值
+    // 有这一类就按这一类的默认值；没有（不该发生）退回词频表默认值
     if by_kind.contains_key(kind) {
         rank::default_tier_pct_for(kind).to_vec()
     } else {
@@ -772,19 +772,19 @@ mod tests {
         p
     }
     // ------------------------------------------------------------ 造数据
-    /// 测试用的词库链。指纹是编出来的：合流只比较指纹，不真的去读词库文件。
+    /// 测试用的词典链。指纹是编出来的：合流只比较指纹，不真的去读词典文件。
     fn fixture_dicts() -> Vec<DictRef> {
         vec![
             DictRef {
-                id: "主词库".into(),
-                name: "主词库".into(),
+                id: "主词典".into(),
+                name: "主词典".into(),
                 path: String::new(),
                 entries: 12,
                 sha256: "a".repeat(64),
             },
             DictRef {
-                id: "叠加词库".into(),
-                name: "叠加词库".into(),
+                id: "叠加词典".into(),
+                name: "叠加词典".into(),
                 path: String::new(),
                 entries: 3,
                 sha256: "b".repeat(64),
@@ -816,7 +816,7 @@ mod tests {
             })
             .collect()
     }
-    /// 写一个作用域的词表 + 字表，返回 `(词表条目, 字表条目)`。
+    /// 写一个表组的词频表 + 字表，返回 `(词频表条目, 字表条目)`。
     ///
     /// `prefix` 让不同产物里的词**不重叠**（产物 A 的「的」与产物 B 的「的」是两个
     /// 不同的词），这样"分开扫 → 合流 → 相加"如果不是逐条正确地累加，比对必然失败，
@@ -905,10 +905,10 @@ mod tests {
             source_tables: Vec::new(),
         });
     }
-    /// 造一份"扫描产物"：每个作用域各一张词表 + 字表。
+    /// 造一份"扫描产物"：每个表组各一张词频表 + 字表。
     ///
     /// **不含 `full`** —— 这正是现在 `scan` 的默认行为（`ScanConfig::write_full`
-    /// 默认为 false），也是跨产物合流要支持的那种"一份产物只有自己那个域"的形状。
+    /// 默认为 false），也是跨产物合流要支持的那种"一份产物只有自己那个表组"的形状。
     fn write_scanned_product(
         root: &Path,
         prefix: &str,
@@ -997,20 +997,20 @@ mod tests {
         artifact::write_meta(&root.join("meta.json"), &meta).unwrap();
         meta
     }
-    /// 三个作用域的形状（既有测试都用它）。
+    /// 三个表组的形状（既有测试都用它）。
     const THREE_SCOPES: [(&str, &[(&str, u64)]); 3] = [
         ("news", &[("的", 100), ("中国", 40), ("人工智能", 7)]),
         ("wiki", &[("的", 80), ("宇宙", 30), ("人工智能", 3)]),
         ("book", &[("的", 60), ("中国", 10), ("文学", 5)]),
     ];
-    /// 一份三作用域、**带 `full`** 的产物（`vocfreq scan --full` 那种）。
+    /// 一份三表组、**带 `full`** 的产物（`vocfreq scan --full` 那种）。
     fn make_full_product(root: &Path, min_count: u64) -> Meta {
         let _ = min_count;
         write_full_product(root, "t", &THREE_SCOPES)
     }
     /// 两份**互相独立**的扫描产物：A 只有 `news`+`wiki`，B 只有 `book`。
     ///
-    /// 这正是"全量语料放不下、只能一个域一个域扫"的形状 —— 两份产物在互不相邻的目录里，
+    /// 这正是"全量语料放不下、只能一个表组一个表组扫"的形状 —— 两份产物在互不相邻的目录里，
     /// 谁也不知道对方存在（想嵌在一起也不行：合流拒绝互相嵌套的源）。两份都**不含
     /// `full`**，与现在 `scan` 的默认行为一致。
     fn two_products(tag: &str) -> (PathBuf, PathBuf) {
@@ -1068,7 +1068,7 @@ mod tests {
     // ------------------------------------------------------------ 单产物相加
     #[test]
     fn compose_equal_to_full_scan() {
-        // 这是相加的**核心正确性**：把各分域表相加，必须与全量扫描出来的 full 表
+        // 这是相加的**核心正确性**：把各表组表相加，必须与全量扫描出来的 full 表
         // 逐条相等（频次、排名、条目数、总量）。不符就说明相加漏了词或重复计数。
         let root = tmpdir("equal");
         make_full_product(&root, 1);
@@ -1084,14 +1084,14 @@ mod tests {
         assert_eq!(out[0].kind, "word");
         let composed = words_of(&root, "相加");
         let full = words_of(&root, "full");
-        assert_eq!(composed, full, "相加出来的词表必须与全量扫描逐条一致");
+        assert_eq!(composed, full, "相加出来的词频表必须与全量扫描逐条一致");
         let ds = Dataset::open(&root).unwrap();
         assert_eq!(
             ds.table("相加", "word").unwrap().total_tokens,
             ds.table("full", "word").unwrap().total_tokens,
             "token 总量也要一致（它决定 pct）"
         );
-        // meta 里出现了新作用域，且记下了来源
+        // meta 里出现了新表组，且记下了来源
         let t = ds.meta.table("相加", "word").unwrap();
         assert_eq!(t.source_tables.len(), 3);
         assert!(t.source_tables.contains(&"news/word".to_string()));
@@ -1137,7 +1137,7 @@ mod tests {
         .unwrap();
         let kinds: Vec<&str> = out.iter().map(|c| c.kind.as_str()).collect();
         assert_eq!(kinds, vec!["char", "word"], "两类都要产出");
-        // word 只该由两张词表加出来，不能把字表也算进去
+        // word 只该由两张词频表加出来，不能把字表也算进去
         let w = out.iter().find(|c| c.kind == "word").unwrap();
         assert_eq!(
             w.sources,
@@ -1213,7 +1213,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(out[0].scope, "搬到别处");
-        // 目录树自检：每个作用域都该有自己那一份表
+        // 目录树自检：每个表组都该有自己那一份表
         let mut tree: Vec<String> = Vec::new();
         for scope in std::fs::read_dir(&out_root).unwrap().flatten() {
             if !scope.path().is_dir() {
@@ -1230,11 +1230,11 @@ mod tests {
         tree.sort();
         assert!(
             tree.iter().any(|p| p == "搬到别处/word.vfr"),
-            "新作用域的表要落在自己的目录里：{tree:?}"
+            "新表组的表要落在自己的目录里：{tree:?}"
         );
         assert!(
             !tree.iter().any(|p| p.starts_with("news/full")),
-            "搬运不该把源表塞进新作用域的目录：{tree:?}"
+            "搬运不该把源表塞进新表组的目录：{tree:?}"
         );
         // 目标目录里应当是一份完整可打开的产物（meta 由源产物并出来）
         let ds = Dataset::open(&out_root)
@@ -1264,13 +1264,13 @@ mod tests {
         ))
         .unwrap_err();
         assert!(e.to_string().contains("两次"), "{e}");
-        // 作用域名撞车（`full` 已经存在）—— 绝不能覆盖
+        // 表组名撞车（`full` 已经存在）—— 绝不能覆盖
         let e = compose(&spec(&root, &["news/word"], "full", Some("word"), None)).unwrap_err();
         assert!(e.to_string().contains("已经"), "{e}");
         // 一张都没选
         let e = compose(&spec(&root, &[], "z", None, None)).unwrap_err();
         assert!(e.to_string().contains("没有选择"), "{e}");
-        // 作用域名会被洗干净，不会跑出目录
+        // 表组名会被洗干净，不会跑出目录
         let c = compose(&spec(
             &root,
             &["news/word"],
@@ -1285,7 +1285,7 @@ mod tests {
     }
     #[test]
     fn composed_table_is_a_first_class_scope() {
-        // 相加出来的表要和别的表完全平级：能当主作用域、能被再次相加。
+        // 相加出来的表要和别的表完全平级：能当主表组、能被再次相加。
         let root = tmpdir("firstclass");
         make_full_product(&root, 1);
         compose(&spec(
@@ -1325,13 +1325,13 @@ mod tests {
     // ------------------------------------------------------------ 跨产物合流
     /// `scan` 默认不产 `full`，`full` 由「跨产物合流 + 相加」得到。
     ///
-    /// 这条测试钉的是**验收标准 1**：分域独立扫描（各产物只有自己的作用域）→ 合流成
-    /// 一份 → 把作用域相加出 `full`，结果与"各作用域全量累加"逐条一致（条目数、token
+    /// 这条测试钉的是**验收标准 1**：表组独立扫描（各产物只有自己的表组）→ 合流成
+    /// 一份 → 把表组相加出 `full`，结果与"各表组全量累加"逐条一致（条目数、token
     /// 总量、每个词的频次与排名）。
     #[test]
     fn merge_products_then_compose_full_matches_accumulated_scopes() {
         let (a, b) = two_products("merge-ok");
-        // 参照基准：把两份产物所有作用域的词/字计数累加起来，按同一口径排行。
+        // 参照基准：把两份产物所有表组的词/字计数累加起来，按同一口径排行。
         // （等价于"一次全量扫描出来的 full"，见 `write_full_product`。）
         let mut ref_words = accumulated(&[&a, &b]);
         ref_words.sort();
@@ -1342,14 +1342,14 @@ mod tests {
             out: out.clone(),
             scope: None,
         })
-        .expect("词库链一致时合流应当成功");
-        assert_eq!(report.tables, 6, "3 个作用域 × 2 类表");
+        .expect("词典链一致时合流应当成功");
+        assert_eq!(report.tables, 6, "3 个表组 × 2 类表");
         assert_eq!(
             report.scopes,
             vec!["book", "news", "wiki"],
-            "合流产物里的作用域就是各源的作用域，一个不多一个不少"
+            "合流产物里的表组就是各源的表组，一个不多一个不少"
         );
-        // 合流产物是一份**标准 v3 单产物**：能直接打开，作用域各自一张表
+        // 合流产物是一份**标准 v3 单产物**：能直接打开，表组各自一张表
         let ds = Dataset::open(&out).expect("合流产物必须能打开");
         assert_eq!(ds.meta.schema_version, SCHEMA_VERSION);
         for scope in ["news", "wiki", "book"] {
@@ -1360,7 +1360,7 @@ mod tests {
         let mut names: Vec<&str> = ds.meta.domains.iter().map(|d| d.name.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["book", "news", "wiki"]);
-        // 相加出全库作用域。**一次调用把两类都加出来** —— 一个作用域只有一份目录，
+        // 相加出全库表组。**一次调用把两类都加出来** —— 一个表组只有一份目录，
         // 分两次 compose 会在第二次撞上"目录已存在"。
         let composed = compose(&spec(
             &out,
@@ -1377,13 +1377,13 @@ mod tests {
             None,
         ))
         .expect("合流之后相加应当成功");
-        assert_eq!(composed.len(), 2, "词表与字表都要加出来");
+        assert_eq!(composed.len(), 2, "词频表与字表都要加出来");
         let word = composed.iter().find(|c| c.kind == "word").unwrap();
         assert_eq!(word.entries, ref_words.len() as u64);
         assert_eq!(
             words_of(&out, "full"),
             ref_words,
-            "合流后相加必须与各域累加逐条一致"
+            "合流后相加必须与各表组累加逐条一致"
         );
         let ds = Dataset::open(&out).unwrap();
         let f = ds.table("full", "char").unwrap();
@@ -1415,7 +1415,7 @@ mod tests {
             kind: Some("word".into()),
             out: Some(out.clone()),
         })
-        .expect("词库链一致时跨产物相加应当成功");
+        .expect("词典链一致时跨产物相加应当成功");
         assert_eq!(written[0].entries, ref_words.len() as u64);
         // 目标目录里必须是**完整**产物：源产物的全部表都在，外加新加出来的那一张
         let ds = Dataset::open(&out).expect("跨产物相加的产物要能打开");
@@ -1434,11 +1434,11 @@ mod tests {
             let _ = std::fs::remove_dir_all(d);
         }
     }
-    /// 合流 / 跨产物相加时，词库链不一致必须**明确报错并拒绝**，绝不静默合并。
+    /// 合流 / 跨产物相加时，词典链不一致必须**明确报错并拒绝**，绝不静默合并。
     #[test]
     fn merge_rejects_mismatched_dict_chain() {
         let (a, b) = two_products("dict-mismatch");
-        // B 换了词库（同一份文件名、内容不同 → 指纹不同）
+        // B 换了词典（同一份文件名、内容不同 → 指纹不同）
         let mut tok = fixture_tokenizer();
         tok.dicts[0].sha256 = "c".repeat(64);
         rewrite_tokenizer(&b, tok);
@@ -1450,7 +1450,7 @@ mod tests {
         })
         .unwrap_err()
         .to_string();
-        assert!(e.contains("词库链"), "错误里要指出是词库链的问题：{e}");
+        assert!(e.contains("词典链"), "错误里要指出是词典链的问题：{e}");
         assert!(
             e.contains("内容指纹不同"),
             "错误里要说清是哪个字段不同：{e}"
@@ -1507,7 +1507,7 @@ mod tests {
     fn merge_rejects_products_without_dict_fingerprints() {
         let (a, b) = two_products("legacy");
         // 两份**都**没有指纹。"两份都是空的"看着一致，其实什么也没说明 ——
-        // 合流的正确性完全依赖"同一份词库、同一套分词口径"。
+        // 合流的正确性完全依赖"同一份词典、同一套分词口径"。
         for root in [&a, &b] {
             let mut tok = fixture_tokenizer();
             tok.dicts.clear();
@@ -1527,12 +1527,12 @@ mod tests {
         }
     }
 
-    /// 两份产物里出现同名作用域时拒绝合流：静默丢数据比报错糟得多。
+    /// 两份产物里出现同名表组时拒绝合流：静默丢数据比报错糟得多。
     #[test]
     fn merge_rejects_scope_name_clash() {
         let a = tmpdir("clash-a");
         let b = tmpdir("clash-b");
-        // A 有 news + book，B 也有 book（内容不同：前缀是 b）—— 三份作用域里恰好只有
+        // A 有 news + book，B 也有 book（内容不同：前缀是 b）—— 三份表组里恰好只有
         // `book` 撞名，其余两个必须照样能认出来。
         write_scanned_product(&a, "a", &[THREE_SCOPES[0], THREE_SCOPES[2]], 1);
         write_scanned_product(&b, "b", &[("book", &[("甲", 5)])], 1);
@@ -1544,7 +1544,7 @@ mod tests {
         })
         .unwrap_err()
         .to_string();
-        assert!(e.contains("作用域名撞车"), "{e}");
+        assert!(e.contains("表组名撞车"), "{e}");
         assert!(e.contains("book"), "要说清撞的是哪个名字：{e}");
         assert!(!out.exists());
         for d in [&a, &b, &out] {
@@ -1595,14 +1595,14 @@ mod tests {
         }
     }
     // ------------------------------------------------------------ 辅助
-    /// 把一份产物改掉 `tokenizer`（模拟"用户换了词库 / 改了分词选项"）。
+    /// 把一份产物改掉 `tokenizer`（模拟"用户换了词典 / 改了分词选项"）。
     fn rewrite_tokenizer(root: &Path, tokenizer: TokenizerMeta) {
         let mut meta: Meta =
             serde_json::from_slice(&std::fs::read(root.join("meta.json")).unwrap()).unwrap();
         meta.tokenizer = tokenizer;
         artifact::write_meta(&root.join("meta.json"), &meta).unwrap();
     }
-    /// 把若干份产物的**全部作用域**累加起来，按同一口径排行。
+    /// 把若干份产物的**全部表组**累加起来，按同一口径排行。
     ///
     /// 这是"一次全量扫描出来的 `full`"的等价物，也是验收标准 1 里的对照基准。
     fn accumulated(roots: &[&Path]) -> Vec<(String, u64, u32)> {

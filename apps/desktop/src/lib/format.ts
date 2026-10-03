@@ -88,7 +88,7 @@ export function formatPct(value: number | null | undefined): string {
 /**
  * 「前 N%」的自适应精度：排名越靠前，需要的有效位数越多。
  *
- * 语料库词表动辄 20 万条，rank 1 的「前 0.0005%」与 rank 200 的「前 0.1%」
+ * 语料库词频表动辄 20 万条，rank 1 的「前 0.0005%」与 rank 200 的「前 0.1%」
  * 都要看得出量级差别，固定两位小数会把前三万名全压成「0.00%」。
  */
 export function formatTopPercent(value: number | null | undefined): string {
@@ -145,7 +145,7 @@ export function clampPercent(value: number | null | undefined): number {
 // 结果表辅助（阈值一律从 meta 里读，绝不硬编码分组边界）
 // ---------------------------------------------------------------------------
 
-/** 从 meta 里找到某张表（默认主作用域的词表） */
+/** 从 meta 里找到某张表（默认主表组的词频表） */
 export function findTable<T extends { path: string; kind: string }>(
   tables: T[],
   kind: 'word' | 'char' = 'word',
@@ -249,14 +249,14 @@ export function tierIndexOfRank(
 }
 
 // ---------------------------------------------------------------------------
-// 分组阈值（主作用域 + 分组自定义的**唯一权威实现**）
+// 分组阈值（主表组 + 分组自定义的**唯一权威实现**）
 //
 // 后端返回的 `token.tier` / `word_hit.tier` 一律按 meta 里的默认阈值算，
 // 用户自定义阈值只在设置里。所以「这个排名属于第几组」必须由这里统一回答，
 // 所有渲染分组的地方（TokenChips / TokenDetail / TierLegend / 排行榜）都走
 // `tierIndexFor`，不要再去读 token.tier。
 //
-// 阈值取自**主作用域**那张表：铺平之后任意作用域都能当主表，写死 `full/word`
+// 阈值取自**主表组**那张表：铺平之后任意表组都能当主表，写死 `full/word`
 // 会让颜色与详情面板里的前%对不上。`tableKey` 参数不给时由调用方
 // （`tiers.svelte.ts::primaryTableKey`）补上。
 // ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ export type BoundsInfo = {
   warning: BoundsWarning | null;
 };
 
-/** 按表身份（`作用域/类型`）取那张 `TableMeta`；给不出来就回落该 kind 的第一张 */
+/** 按表身份（`表组/类型`）取那张 `TableMeta`；给不出来就回落该 kind 的第一张 */
 function resolveTable(
   meta: Meta,
   kind: 'word' | 'char',

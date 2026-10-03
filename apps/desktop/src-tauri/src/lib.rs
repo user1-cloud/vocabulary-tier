@@ -12,12 +12,15 @@
 
 mod capture;
 mod library;
+mod single_instance;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -83,7 +86,7 @@ pub struct WordHit {
     pub top_pct: f64,
     /// 查的那张表的总条目数（算前% 的分母，界面反解阈值时也要用）
     pub entries: u64,
-    /// 查的是哪个作用域的表
+    /// 查的是哪个表组的表
     pub scope: String,
     pub in_dict: bool,
 }
@@ -123,7 +126,7 @@ pub struct ScanParams {
     /// 产物输出目录（绝对路径）。界面默认填 `<数据文件夹>\tables\<表名>`，
     /// 由 `suggest_table_dir` 命令给出，用户也可以改成任意位置。
     pub out: String,
-    /// 用数据文件夹 `dicts\` 里的哪几个词库，**按顺序、第一个是主词库**。
+    /// 用数据文件夹 `dicts\` 里的哪几个词典，**按顺序、第一个是主词典**。
     /// 空数组表示"目录里全部 `.dict`，按文件名排序"。
     #[serde(default)]
     pub dict_files: Vec<String>,
@@ -180,7 +183,7 @@ fn clamp_popup_size(w: f64, h: f64) -> (f64, f64) {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub corpus_dir: Option<String>,
-    /// **数据文件夹**：里面是 `dicts\`（词库库）与 `tables\`（词表库）两个子目录。
+    /// **数据文件夹**：里面是 `dicts\`（词典库）与 `tables\`（词频表库）两个子目录。
     ///
     /// `None` 表示用默认位置（`%LOCALAPPDATA%\com.voctier.desktop\data`）。
     ///
@@ -194,6 +197,11 @@ pub struct Settings {
     pub popup_opacity: f64,
     pub popup_always_on_top: bool,
     pub popup_auto_close_ms: u64,
+    /// **预留**：关闭主窗口时收进系统托盘而不是退出应用。
+    ///
+    /// 当前固定为 `true`（托盘常驻），界面暂未提供开关；等以后要做成可配置时，
+    /// 在设置页加一个开关写这个字段即可，关闭逻辑已按它分派。
+    pub close_to_tray: bool,
     pub theme: String,
     /// 界面语言（BCP 47，例如 `zh-CN`）。
     ///
@@ -205,7 +213,7 @@ pub struct Settings {
     pub keep_digit: bool,
     pub keep_latin: bool,
     pub skip_single_char: bool,
-    /// 扫描用哪条词库链：`dicts\` 下的**文件名**，按顺序、**第一个是主词库**。
+    /// 扫描用哪条词典链：`dicts\` 下的**文件名**，按顺序、**第一个是主词典**。
     ///
     /// `None` 或空数组 = 用数据文件夹里全部 `.dict`（按文件名排序）。
     /// 存文件名而不是绝对路径：数据文件夹是可以在设置里搬走的，文件名不会因此失效。
@@ -223,25 +231,25 @@ pub struct Settings {
     pub active_table_path: Option<String>,
     pub min_count: u64,
     pub skip_domain_tables: bool,
-    /// **主作用域**：回答「这个词/字有多常见」的那一张表。
+    /// **主表组**：回答「这个词/字有多常见」的那一张表。
     ///
-    /// 现在所有作用域都是平等的（`full` 只是"全部相加"的那一个），稀有度、着色、
-    /// 分组、排行榜都以这里指定的为准；其余作用域只做对比。
+    /// 现在所有表组都是平等的（`full` 只是"全部相加"的那一个），稀有度、着色、
+    /// 分组、排行榜都以这里指定的为准；其余表组只做对比。
     ///
-    /// 存的是**纯作用域名**（`full`、`news`、`相加：财经`），不是 `full/word`
-    /// 那种"作用域/类型"的路径 —— 类型是查表时才决定的（单字查字表、其余查词表）。
-    /// `None` / 空串 = 用 `full`，没有 `full` 就用排序后的第一个作用域。
+    /// 存的是**纯表组名**（`full`、`news`、`相加：财经`），不是 `full/word`
+    /// 那种"表组/类型"的路径 —— 类型是查表时才决定的（单字查字表、其余查词频表）。
+    /// `None` / 空串 = 用 `full`，没有 `full` 就用排序后的第一个表组。
     pub primary_scope: Option<String>,
-    /// **已废弃**：从前用它挑"参与分域对比与排行榜"的表。
+    /// **已废弃**：从前用它挑"参与表组对比与排行榜"的表。
     ///
-    /// 铺平之后不再需要它：任何作用域都能当主表、都能参与相加，对比列表也一律
+    /// 铺平之后不再需要它：任何表组都能当主表、都能参与相加，对比列表也一律
     /// 全给（`analyze` 里的对比查询本来就是 O(1) 的二分）。字段留着只是为了
     /// 读得进老设置文件，**不再有任何行为**。
     pub enabled_tables: Option<Vec<String>>,
     /// 分组方法：`top_pct`（按前%，**默认**）/ `rank`（按绝对排名）/
     /// `coverage`（按累计覆盖率）/ `even`（按词条数等分）
     pub tier_method: String,
-    /// 自定义词表阈值：6 个排名上界，第 7 组自动是「以上全部」
+    /// 自定义词频表阈值：6 个排名上界，第 7 组自动是「以上全部」
     pub tier_word_bounds: Option<Vec<u64>>,
     /// 自定义字表阈值：同上
     pub tier_char_bounds: Option<Vec<u64>>,
@@ -263,6 +271,7 @@ impl Default for Settings {
             popup_opacity: 1.0,
             popup_always_on_top: true,
             popup_auto_close_ms: 0,
+            close_to_tray: true,
             theme: "system".into(),
             locale: "zh-CN".into(),
             threads: 0,
@@ -307,10 +316,10 @@ struct AppState {
     pending: Mutex<String>,
     settings: Mutex<Settings>,
     settings_file: Mutex<Option<PathBuf>>,
-    /// 覆盖率曲线缓存。全库词表 380 万条要顺序读一遍记录区（约 1 秒），
+    /// 覆盖率曲线缓存。全库词频表 380 万条要顺序读一遍记录区（约 1 秒），
     /// 而它只跟这一份产物有关、与用户操作无关，所以算一次就留着。
     ///
-    /// 注意「产物」是会被**原地重算**的：词表管理器提供「一键重新统计」，而重算
+    /// 注意「产物」是会被**原地重算**的：词频表管理器提供「一键重新统计」，而重算
     /// 通常写回同一个目录。所以键里必须带内容标识（见 [`curve_cache_key`]），
     /// 并且打开新数据集时整体清空（见 [`AppState::load_dataset`]）。
     curves: Mutex<std::collections::HashMap<String, TierCurve>>,
@@ -327,10 +336,10 @@ struct AppState {
     /// 最近一次取词为什么没取到（给用户看的短句，取到内容时为空）。
     /// 直接显示在小窗里，省得用户去翻日志。
     capture_note: Mutex<String>,
-    /// 当前打开那张表的**词库绑定状态**。界面要显示"这张表记录的词库已经变了，
+    /// 当前打开那张表的**词典绑定状态**。界面要显示"这张表记录的词典已经变了，
     /// 频次可能不准"，所以打开时算一次存下来，而不是每次查询都重算。
     active_binding: Mutex<Option<Binding>>,
-    /// 打开那张表时给用户看的告警（v1 老产物、词库缺失后退化成现有词库…）。
+    /// 打开那张表时给用户看的告警（v1 老产物、词典缺失后退化成现有词典…）。
     active_warnings: Mutex<Vec<String>>,
 }
 
@@ -367,7 +376,7 @@ impl AppState {
             .ok_or_else(|| "尚未打开词频表，请先在「生成词频表」页完成一次统计".to_string())
     }
 
-    /// 数据文件夹（词库库 + 词表库）。
+    /// 数据文件夹（词典库 + 词频表库）。
     ///
     /// 启动时 [`AppState::migrate_settings`] 一定会把 `settings.data_dir` 填上，
     /// 所以正常路径不会走到那个兜底值。
@@ -395,21 +404,21 @@ impl AppState {
             .map(|n| self.library().table_dir(n))
     }
 
-    /// 打开一张表，并按 `meta.json` 记录的**词库链**重建分词器。
+    /// 打开一张表，并按 `meta.json` 记录的**词典链**重建分词器。
     ///
-    /// 这是词库外置之后最关键的一处：分词器必须跟建表时用的是同一条词库链，否则
-    /// 分词结果对不上已经落盘的词表，查出来的频次会系统性偏错 —— 而且用户看不出来。
+    /// 这是词典外置之后最关键的一处：分词器必须跟建表时用的是同一条词典链，否则
+    /// 分词结果对不上已经落盘的词频表，查出来的频次会系统性偏错 —— 而且用户看不出来。
     /// 所以：
     ///
-    /// * 优先按记录里的**指纹/名字**在数据文件夹里找回那几份词库；
-    /// * v1 老产物压根没记词库 → 拿现有的顶上，但**记下告警**让界面说出来；
-    /// * 记录里的词库找不全 → 同样退化 + 告警，并在 [`Binding`] 里标成漂移/缺失。
+    /// * 优先按记录里的**指纹/名字**在数据文件夹里找回那几份词典；
+    /// * v1 老产物压根没记词典 → 拿现有的顶上，但**记下告警**让界面说出来；
+    /// * 记录里的词典找不全 → 同样退化 + 告警，并在 [`Binding`] 里标成漂移/缺失。
     ///
     /// 绝不静默：宁可让用户看到"频次可能不准"，也不能让他对着一堆错数字深信不疑。
     fn load_dataset(&self, dir: &str) -> Result<Meta, String> {
-        // 主作用域来自设置：它是"这个词有多常见"的**唯一口径**，所以打开产物时就要
+        // 主表组来自设置：它是"这个词有多常见"的**唯一口径**，所以打开产物时就要
         // 定下来，而不是每次查询临时决定（否则同一句话在不同页面会算出不同颜色）。
-        // 设置里那个作用域在这份产物里不存在时，`Dataset` 会回落到 `full` 再回落第一个。
+        // 设置里那个表组在这份产物里不存在时，`Dataset` 会回落到 `full` 再回落第一个。
         let wanted = self.settings_snapshot().primary_scope;
         let ds = Dataset::open_with_primary(Path::new(dir), wanted.as_deref())
             .map_err(|e| e.to_string())?;
@@ -437,8 +446,8 @@ impl AppState {
         if used_fallback {
             if dicts.iter().all(|d| !d.usable()) {
                 return Err(format!(
-                    "这张表是基于词库「{}」生成的，但数据文件夹里没有可用的词库。\n\
-                     请先到「词库管理」里导入或新建一份词库，再打开这张表。\n{}",
+                    "这张表是基于词典「{}」生成的，但数据文件夹里没有可用的词典。\n\
+                     请先到「词典管理」里导入或新建一份词典，再打开这张表。\n{}",
                     vocfreq_core::dict::describe_chain(&recorded),
                     format_broken_dicts(&dicts)
                 ));
@@ -451,14 +460,14 @@ impl AppState {
 
         if !has_record {
             warnings.push(format!(
-                "这张表没有可校验的词库记录（v1 老产物，当年词库是编在程序里的），\
+                "这张表没有可校验的词典记录（v1 老产物，当年词典是编在程序里的），\
                  无从判断口径是否一致。现在按「{}」分词，频次可能不准 —— 建议重新统计一次。",
                 vocfreq_core::dict::describe_chain(&tk.dicts)
             ));
         } else if used_fallback || chain.len() != recorded.len() {
             warnings.push(format!(
-                "这张表记录的词库是「{}」，但{}。现在按「{}」分词，频次可能不准 —— \
-                 建议重新统计，或把缺的词库补回数据文件夹。",
+                "这张表记录的词典是「{}」，但{}。现在按「{}」分词，频次可能不准 —— \
+                 建议重新统计，或把缺的词典补回数据文件夹。",
                 vocfreq_core::dict::describe_chain(&recorded),
                 if used_fallback {
                     "在数据文件夹里一份都找不到"
@@ -531,7 +540,7 @@ impl AppState {
             s.data_dir = Some(default_data_dir.display().to_string());
         }
 
-        // 从前的单个「用户词典」不再自动叠加了：现在词库是数据文件夹里可勾选的条目
+        // 从前的单个「用户词典」不再自动叠加了：现在词典是数据文件夹里可勾选的条目
         if let Some(ud) = s.user_dict.clone().filter(|u| !u.is_empty()) {
             notes.push(format!(
                 "老设置里的「用户词典」{ud} 不再自动叠加。要让它参与统计，\
@@ -572,7 +581,7 @@ impl AppState {
         self.load_dataset(&want.display().to_string()).map(|_| ())
     }
 
-    /// 按当前设置重开一次已激活的产物目录（主作用域变了、或相加出了新表之后用）。
+    /// 按当前设置重开一次已激活的产物目录（主表组变了、或相加出了新表之后用）。
     ///
     /// 没打开过任何表时什么都不做。重开失败（目录被删了）只记一行日志：那是
     /// "当前没有可用的表"的正常状态，界面自己会显示出来。
@@ -590,16 +599,16 @@ impl AppState {
     }
 }
 
-/// 把界面上勾选的词库解析成一条**词库链**（顺序即装载顺序，第一个是主词库）。
+/// 把界面上勾选的词典解析成一条**词典链**（顺序即装载顺序，第一个是主词典）。
 ///
 /// 两种名字都认，这是刻意的：
-/// * `预制词库.dict` —— [`DictItem::file_name`]，词库管理页与扫描页勾的就是它；
-/// * `预制词库` —— [`vocfreq_core::dict::DictRef::name`]，也就是 `meta.json` 里
+/// * `预制词典.dict` —— [`DictItem::file_name`]，词典管理页与扫描页勾的就是它；
+/// * `预制词典` —— [`vocfreq_core::dict::DictRef::name`]，也就是 `meta.json` 里
 ///   `tokenizer.dicts[].name` 存的那个（文件名去扩展名）。
-///   **「重新统计」那条路传回来的正是这个**：它从产物的 meta 里读词库名。只认前者的话
-///   勾选会全部落空、链变成空的，用户看到的是"没有可用的词库"这种牛头不对马嘴的报错。
+///   **「重新统计」那条路传回来的正是这个**：它从产物的 meta 里读词典名。只认前者的话
+///   勾选会全部落空、链变成空的，用户看到的是"没有可用的词典"这种牛头不对马嘴的报错。
 ///
-/// 一个都没匹配上时返回**空表**，由调用方报错 —— 不要在这里静默退化成"用全部词库"：
+/// 一个都没匹配上时返回**空表**，由调用方报错 —— 不要在这里静默退化成"用全部词典"：
 /// 那会让用户以为"我勾的那份生效了"，而实际用的是另一套口径，频次静默偏错。
 fn resolve_scan_dicts(selected: &[String], available: &[DictItem]) -> Vec<PathBuf> {
     if selected.is_empty() {
@@ -620,7 +629,7 @@ fn resolve_scan_dicts(selected: &[String], available: &[DictItem]) -> Vec<PathBu
         .collect()
 }
 
-/// 把读不出来的词库列成一句给用户看的话。空列表返回空串。
+/// 把读不出来的词典列成一句给用户看的话。空列表返回空串。
 fn format_broken_dicts(dicts: &[DictItem]) -> String {
     let broken: Vec<String> = dicts
         .iter()
@@ -636,12 +645,12 @@ fn format_broken_dicts(dicts: &[DictItem]) -> String {
     if broken.is_empty() {
         return String::new();
     }
-    format!("这些词库文件读不了，请修好或删掉：\n{}", broken.join("\n"))
+    format!("这些词典文件读不了，请修好或删掉：\n{}", broken.join("\n"))
 }
 
 /// 数据文件夹的默认位置。
 ///
-/// * 用 `%LOCALAPPDATA%`（不是 `%APPDATA%`）：词库加词表上百 MB，放进 Roaming
+/// * 用 `%LOCALAPPDATA%`（不是 `%APPDATA%`）：词典加词频表上百 MB，放进 Roaming
 ///   会被域环境的漫游配置同步走，那是个灾难。
 /// * 再套一层 `data\`：`%LOCALAPPDATA%\com.voctier.desktop` 同时是 **WebView2 的
 ///   默认数据目录**（tauri 的 `app_local_data_dir` 文档原话），资产直接摊在根上
@@ -712,7 +721,7 @@ async fn dataset_status(dir: String) -> DatasetStatus {
         .ok()
         .and_then(|b| serde_json::from_slice::<Meta>(&b).ok());
     // 判据必须是「**真的能打开**」而不是"某几个固定文件在不在"：
-    // 布局铺平之后表可能分布在任意作用域目录里，硬看 `full/word.vfr` 会把一张
+    // 布局铺平之后表可能分布在任意表组目录里，硬看 `full/word.vfr` 会把一张
     // 完全正常的表判成不可用（或者反过来，把一个半截目录判成可用）。
     let exists = Dataset::open(base).is_ok();
     DatasetStatus {
@@ -734,9 +743,9 @@ fn active_dataset(state: State<'_, AppState>) -> Option<Meta> {
     state.data().ok().map(|ds| ds.meta.clone())
 }
 
-/// 打开**数据文件夹之外**的任意产物目录（"指向一份已有的词表"）。
+/// 打开**数据文件夹之外**的任意产物目录（"指向一份已有的词频表"）。
 ///
-/// 它会被记成"当前激活的表"，并且带 `activeTablePath` 出现在词表列表里，
+/// 它会被记成"当前激活的表"，并且带 `activeTablePath` 出现在词频表列表里，
 /// 但标成 `in_library: false` —— 那种目录不归我们管，界面不给删除。
 #[tauri::command]
 async fn open_dataset(state: State<'_, AppState>, dir: String) -> Result<Meta, String> {
@@ -746,7 +755,7 @@ async fn open_dataset(state: State<'_, AppState>, dir: String) -> Result<Meta, S
     log_line(
         "startup.log",
         &format!(
-            "IPC open_dataset({dir}) 成功：{} 张表 / {} 个作用域",
+            "IPC open_dataset({dir}) 成功：{} 张表 / {} 个表组",
             meta.tables.len(),
             meta.scopes().len()
         ),
@@ -755,10 +764,10 @@ async fn open_dataset(state: State<'_, AppState>, dir: String) -> Result<Meta, S
 }
 
 // ===========================================================================
-// 数据文件夹：词库管理 + 词表管理
+// 数据文件夹：词典管理 + 词频表管理
 // ===========================================================================
 
-/// 数据文件夹的整体状况。界面开机就要拿它渲染「词库管理」与「词表管理」。
+/// 数据文件夹的整体状况。界面开机就要拿它渲染「词典管理」与「词频表管理」。
 ///
 /// 字段保持 snake_case：本项目的约定是**入参 camelCase、出参 snake_case**
 /// （见文件末尾的契约测试），这里跟着 `DictItem` / `TableItem` 走，别搞成两套。
@@ -773,9 +782,9 @@ pub struct LibraryInfo {
     pub active_table: Option<String>,
     /// 当前激活的表在数据文件夹之外时的绝对路径
     pub active_table_path: Option<String>,
-    /// 当前激活那张表的词库绑定状态
+    /// 当前激活那张表的词典绑定状态
     pub active_binding: Option<Binding>,
-    /// 打开时攒下的告警（v1 老产物、词库缺失后退化…）。界面应当直接显示出来。
+    /// 打开时攒下的告警（v1 老产物、词典缺失后退化…）。界面应当直接显示出来。
     pub active_warnings: Vec<String>,
 }
 
@@ -802,8 +811,8 @@ fn library_info(app: tauri::AppHandle, state: State<'_, AppState>) -> LibraryInf
 /// 换数据文件夹。
 ///
 /// 只建目录、**不搬运**已有内容：用户可能只是想指过去看看，替他搬 92 MB 的表格
-/// 出来属于自作主张。但会把"当前激活的表"清掉 —— 换了文件夹就是换了一整套词库
-/// 与词表，原来那张多半已经不在这套里了，留着它只会让界面状态含糊。
+/// 出来属于自作主张。但会把"当前激活的表"清掉 —— 换了文件夹就是换了一整套词典
+/// 与词频表，原来那张多半已经不在这套里了，留着它只会让界面状态含糊。
 #[tauri::command]
 fn set_data_dir(
     app: tauri::AppHandle,
@@ -833,9 +842,9 @@ fn set_data_dir(
     Ok(library_info(app, state))
 }
 
-/// 列出数据文件夹里的全部词库。
+/// 列出数据文件夹里的全部词典。
 ///
-/// ⚠ 会完整读取并解析每个 `.dict`（一份 349,046 条的 jieba 词库约 50–100 ms），
+/// ⚠ 会完整读取并解析每个 `.dict`（一份 349,046 条的 jieba 词典约 50–100 ms），
 /// 因为列表要显示有效词条数、注释行数、以及"多少条显式写了 0"这类隐患。
 /// 界面应当按需调用并缓存结果，别在每次重渲染时都调。
 #[tauri::command]
@@ -847,22 +856,22 @@ fn dict_list(state: State<'_, AppState>) -> Vec<DictItem> {
 #[tauri::command]
 async fn dict_import(state: State<'_, AppState>, path: String) -> Result<String, String> {
     let landed = state.library().import_dict(Path::new(&path))?;
-    log_line("startup.log", &format!("导入词库 {path} → {landed}"));
+    log_line("startup.log", &format!("导入词典 {path} → {landed}"));
     Ok(landed)
 }
 
-/// 删掉一份词库。
+/// 删掉一份词典。
 ///
 /// 界面应当先用 `table_list` 的结果算出"哪些表用到它"，让用户确认 ——
-/// 删掉被引用的词库会让那些表变成"词库缺失"，虽然不会崩，但频次就不可信了。
+/// 删掉被引用的词典会让那些表变成"词典缺失"，虽然不会崩，但频次就不可信了。
 #[tauri::command]
 fn dict_delete(state: State<'_, AppState>, file_name: String) -> Result<(), String> {
     state.library().delete_dict(&file_name)?;
-    log_line("startup.log", &format!("删除词库 {file_name}"));
+    log_line("startup.log", &format!("删除词典 {file_name}"));
     Ok(())
 }
 
-/// 列出词表：数据文件夹里的全部 + 数据文件夹之外那张激活的（如果有）。
+/// 列出词频表：数据文件夹里的全部 + 数据文件夹之外那张激活的（如果有）。
 #[tauri::command]
 fn table_list(state: State<'_, AppState>) -> Vec<TableItem> {
     let s = state.settings_snapshot();
@@ -893,7 +902,7 @@ async fn activate_library_table(state: State<'_, AppState>, name: String) -> Res
     log_line(
         "startup.log",
         &format!(
-            "激活词表 {name}：{} 张表 / {} 个作用域",
+            "激活词频表 {name}：{} 张表 / {} 个表组",
             meta.tables.len(),
             meta.scopes().len()
         ),
@@ -909,18 +918,18 @@ async fn activate_library_table(state: State<'_, AppState>, name: String) -> Res
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeParams {
-    /// 源表身份（`作用域/类型`），至少一个
+    /// 源表身份（`表组/类型`），至少一个
     pub sources: Vec<String>,
-    /// 新作用域名（会变成同一份产物里的另一个作用域目录）
+    /// 新表组名（会变成同一份产物里的另一个表组目录）
     pub scope: String,
     /// 只要这一类；不给 = 源表里出现过的每一类都相加
     #[serde(default)]
     pub kind: Option<String>,
 }
 
-/// 把若干张表相加成一张新表（同一份产物目录里的另一个作用域）。
+/// 把若干张表相加成一张新表（同一份产物目录里的另一个表组）。
 ///
-/// 相加出来的表**与别的表完全平级**：可以当主作用域、可以再被相加、可以删除。
+/// 相加出来的表**与别的表完全平级**：可以当主表组、可以再被相加、可以删除。
 /// 代价是磁盘上多一份（≈ 一张扫描出来的表），源表不需要了可以删掉回收。
 ///
 /// 用 `spawn_blocking` 包着：380 万词的表相加要读几十 MB、写上百 MB，是秒级的
@@ -932,7 +941,7 @@ async fn compose_tables(
 ) -> Result<Vec<vocfreq_core::compose::ComposedTable>, String> {
     state.ensure_dataset(None)?;
     let ds = state.data()?;
-    // 相加只允许在**当前产物目录内部**进行：源表必须来自同一次扫描，否则词库链、
+    // 相加只允许在**当前产物目录内部**进行：源表必须来自同一次扫描，否则词典链、
     // 分词口径都可能不同，加出来的表会自相矛盾。所以这里不暴露"输出到哪"。
     let from = ds.root.clone();
     drop(ds);
@@ -954,12 +963,12 @@ async fn compose_tables(
     .map_err(|e| format!("相加任务失败：{e}"))?
     .map_err(|e| e.to_string())?;
 
-    // 重新装一遍：新表要立刻出现在表列表与作用域选择里
+    // 重新装一遍：新表要立刻出现在表列表与表组选择里
     state.refresh_primary_scope();
     log_line(
         "startup.log",
         &format!(
-            "相加完成：{} + → 作用域「{}」（{} 类表）",
+            "相加完成：{} + → 表组「{}」（{} 类表）",
             params.sources.join(" + "),
             params.scope,
             written.len()
@@ -968,7 +977,7 @@ async fn compose_tables(
     Ok(written)
 }
 
-/// 换主作用域：决定"这个词有多常见"的是哪一张表。
+/// 换主表组：决定"这个词有多常见"的是哪一张表。
 ///
 /// 粒度是**整个应用**，不是某一页 —— 划句分析、排行榜、分组阈值必须用同一张表，
 /// 否则同一句话在两个页面会显示成两种颜色。
@@ -979,7 +988,7 @@ async fn set_primary_scope(state: State<'_, AppState>, scope: String) -> Result<
         let ds = state.data()?;
         if !ds.scopes().iter().any(|s| s == &scope) {
             return Err(format!(
-                "这份产物里没有作用域「{scope}」；可用的是：{}",
+                "这份产物里没有表组「{scope}」；可用的是：{}",
                 ds.scopes().join("、")
             ));
         }
@@ -988,7 +997,7 @@ async fn set_primary_scope(state: State<'_, AppState>, scope: String) -> Result<
     // `Dataset::primary_scope` 是打开时定下来的，改了设置必须重开一次
     state.refresh_primary_scope();
     let meta = state.data()?.meta.clone();
-    log_line("startup.log", &format!("主作用域切换为「{scope}」"));
+    log_line("startup.log", &format!("主表组切换为「{scope}」"));
     Ok(meta)
 }
 
@@ -1013,7 +1022,7 @@ fn table_delete(state: State<'_, AppState>, name: String) -> Result<(), String> 
         *state.active_binding.lock().map_err(|_| "状态锁损坏")? = None;
         state.active_warnings.lock().map_err(|_| "状态锁损坏")?.clear();
     }
-    log_line("startup.log", &format!("删除词表 {name}"));
+    log_line("startup.log", &format!("删除词频表 {name}"));
     Ok(())
 }
 
@@ -1036,7 +1045,7 @@ fn ensure_data_dirs(state: State<'_, AppState>) -> Result<String, String> {
     Ok(lib.root().display().to_string())
 }
 
-/// 数据文件夹里有没有可用的词库。扫描页拿它决定要不要挡住"开始统计"。
+/// 数据文件夹里有没有可用的词典。扫描页拿它决定要不要挡住"开始统计"。
 #[tauri::command]
 fn library_ready(state: State<'_, AppState>) -> bool {
     state.library().list_dicts().iter().any(|d| d.usable())
@@ -1057,7 +1066,7 @@ impl AppState {
 
 /// 从数据集里挑出要查的那张表。
 ///
-/// `scope` 为 `None` / 空 = **主作用域**（用户选的那张）。所有"这个词有多常见"
+/// `scope` 为 `None` / 空 = **主表组**（用户选的那张）。所有"这个词有多常见"
 /// 的查询都走这里，因此全应用只有一套口径。
 fn pick_table<'a>(ds: &'a Dataset, scope: Option<&str>, kind: &str) -> Option<&'a vocfreq_core::query::TableRef> {
     match scope {
@@ -1066,7 +1075,7 @@ fn pick_table<'a>(ds: &'a Dataset, scope: Option<&str>, kind: &str) -> Option<&'
     }
 }
 
-/// 按「作用域/类型」形式（`full/word`、`news/char`、`相加：财经/word`）定位表。
+/// 按「表组/类型」形式（`full/word`、`news/char`、`相加：财经/word`）定位表。
 /// 解析逻辑只在 core 里实现一次，这里只是转发。
 fn pick_by_key<'a>(ds: &'a Dataset, key: &str) -> Option<&'a vocfreq_core::query::TableRef> {
     ds.table_by_key(key)
@@ -1102,9 +1111,9 @@ async fn analyze_text(
     let tk = state.tokens()?;
     let mut out = ds.analyze(&tk, &text);
 
-    // `domains` 现在是「对比列里保留哪些**作用域**」。空数组 = 全保留。
+    // `domains` 现在是「对比列里保留哪些**表组**」。空数组 = 全保留。
     //
-    // 这里已经不再查 `enabledTables`：铺平之后作用域数量由产物决定（可能几十个），
+    // 这里已经不再查 `enabledTables`：铺平之后表组数量由产物决定（可能几十个），
     // 而对比查询只对**句子里的 token** 做，超长输入另有 512 token 的闸门
     // （`query::MAX_COMPARE_TOKENS`）。再叠一层设置开关只会让"我明明开了却看不到"。
     if !domains.is_empty() {
@@ -1122,7 +1131,7 @@ async fn analyze_text(
 /// 结果按产物缓存，重复调用不会再读一遍记录区。
 /// 覆盖率曲线的缓存键。
 ///
-/// **必须带内容标识，不能只用路径**：词表管理器提供了「一键重新统计」，而重算通常
+/// **必须带内容标识，不能只用路径**：词频表管理器提供了「一键重新统计」，而重算通常
 /// 就是写回同一个目录 —— 路径没变、数据全变了。只用路径当键，重算之后曲线会一直是
 /// 旧的那条，而它正是「按覆盖率分组」的输入，分组结果会跟着一起错。
 ///
@@ -1186,7 +1195,7 @@ async fn lookup_word(
             "word".into()
         }
     });
-    let table = pick_table(&ds, None, &kind).ok_or_else(|| "词表不存在".to_string())?;
+    let table = pick_table(&ds, None, &kind).ok_or_else(|| "词频表不存在".to_string())?;
     let total = table.total_tokens.max(1);
     let entries = table.entries;
     let scope = table.scope.clone();
@@ -1233,7 +1242,7 @@ async fn list_rank(
     let kind = kind.unwrap_or_else(|| "word".into());
     let table = pick_table(&ds, domain.as_deref(), &kind).ok_or_else(|| {
         format!(
-            "找不到作用域 {} 的 {kind} 表",
+            "找不到表组 {} 的 {kind} 表",
             domain.as_deref().unwrap_or("(主表)")
         )
     })?;
@@ -1276,17 +1285,17 @@ async fn search_words(
 
 #[tauri::command]
 fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>, params: ScanParams) -> Result<(), String> {
-    // 词库这一关必须在**置位 scanning 之前**过：一旦置了位再返回 Err，
+    // 词典这一关必须在**置位 scanning 之前**过：一旦置了位再返回 Err，
     // 那个标志就永远留在 true，用户之后再也点不动"开始统计"。
     let lib = state.library();
     let available = lib.list_dicts();
     let chain = resolve_scan_dicts(&params.dict_files, &available);
     if chain.is_empty() {
         return Err(format!(
-            "没有可用的词库，无法统计。\n\
+            "没有可用的词典，无法统计。\n\
              数据文件夹：{}\n\
              你勾选的：{}\n\
-             请在「词库管理」里确认这些词库还在、文件没读错，或导入一份新的 .dict。\n{}",
+             请在「词典管理」里确认这些词典还在、文件没读错，或导入一份新的 .dict。\n{}",
             lib.dicts_dir().display(),
             if params.dict_files.is_empty() {
                 "（未勾选，默认用数据文件夹里全部 .dict）".to_string()
@@ -1309,10 +1318,10 @@ fn start_scan(app: tauri::AppHandle, state: State<'_, AppState>, params: ScanPar
     cfg.dicts = chain;
     cfg.only_domains = params.only_domains.clone();
     cfg.skip_domain_tables = params.skip_domain_tables;
-    // 「只要一张全库表」这一个选项 = 不要分域表 **且** 要 full。
+    // 「只要一张全库表」这一个选项 = 不要表组 **且** 要 full。
     //
     // `scan` 现在默认不产 `full`（它改由「合流 + 相加」得到，见 docs/DATA_LAYOUT.md §七），
-    // 所以这里必须显式打开 `write_full` —— 否则"不要分域表 + 不要 full"会产出一份
+    // 所以这里必须显式打开 `write_full` —— 否则"不要表组 + 不要 full"会产出一份
     // 一张表都没有的目录，`Dataset::open` 直接打不开。核心库里另有一道前置校验兜住
     // 这种组合（`scan` 会明确报错而不是写出一份废产物）。
     cfg.write_full = params.skip_domain_tables;
@@ -1430,7 +1439,7 @@ fn set_settings(
         let _ = w.set_size(tauri::LogicalSize::new(pw, ph));
     }
 
-    // 换了主作用域就要把数据集重新装一遍：`Dataset::primary_scope` 是打开时定下来的，
+    // 换了主表组就要把数据集重新装一遍：`Dataset::primary_scope` 是打开时定下来的，
     // 不重开的话界面上的"主表"标签变了、颜色却没变，属于最难查的一类不一致。
     state.refresh_primary_scope();
     Ok(())
@@ -2030,6 +2039,51 @@ fn webview_data_candidates() -> Vec<(Option<PathBuf>, &'static str)> {
 ///
 /// 主窗口**刻意不在 `tauri.conf.json` 里声明**：只有自己在 setup 里建，才能控制
 /// `data_directory`，从而在默认位置不可用时自动回退。
+/// 把主窗口带到前台（显示、还原、聚焦）。
+///
+/// 三处复用：托盘「显示主窗口」菜单、托盘图标单击、以及单实例机制收到
+/// 第二次启动请求时唤起已有实例。
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window(MAIN_LABEL) {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// 创建系统托盘：主窗口关闭后应用常驻后台的「可见出口」。
+///
+/// 交互约定：左键单击图标 → 显示主窗口；右键 → 菜单（显示主窗口 / 退出）。
+fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut b = TrayIconBuilder::with_id("voctier-main-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        b = b.icon(icon.clone());
+    }
+    b.build(app)?;
+    Ok(())
+}
+
 fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, String> {
     let mut last_err = String::new();
     for (dir, label) in webview_data_candidates() {
@@ -2134,6 +2188,19 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
 
+            // 单实例判定：若已有实例在运行，本进程直接退出，**不创建任何窗口、也不碰
+            // 第一个实例的窗口**。唤起主窗口统一走托盘（show_main_window，Tauri API），
+            // 避免用 Win32 直接戳窗口破坏 tao 的可见状态缓存，导致「点关闭不隐藏」。
+            if single_instance::detect_existing_instance() {
+                log_line("startup.log", "[单实例] 检测到已有实例 → 本进程直接退出");
+                handle.exit(0);
+                return Ok(());
+            }
+
+            // 系统托盘：主窗口关闭后应用常驻后台，从这里恢复或退出。
+            // 左键单击图标 = 显示主窗口；右键菜单 = 显示主窗口 / 退出。
+            create_tray(handle).ok();
+
             // 设置文件放在应用配置目录
             if let Ok(dir) = handle.path().app_config_dir() {
                 let file = dir.join("settings.json");
@@ -2186,15 +2253,15 @@ pub fn run() {
                         Ok(m) => log_line(
                             "startup.log",
                             &format!(
-                                "已载入词表 {}（{} 张表 / {} 词条）",
+                                "已载入词频表 {}（{} 张表 / {} 词条）",
                                 dir.display(),
                                 m.tables.len(),
                                 m.tables.iter().filter(|t| t.kind == "word").map(|t| t.entries).max().unwrap_or(0)
                             ),
                         ),
-                        Err(e) => log_line("startup.log", &format!("[warn] 打开上次的词表失败：{e}")),
+                        Err(e) => log_line("startup.log", &format!("[warn] 打开上次的词频表失败：{e}")),
                     }
-                    // 加载时攒下的告警（v1 老产物、词库缺失后退化…）必须落进日志：
+                    // 加载时攒下的告警（v1 老产物、词典缺失后退化…）必须落进日志：
                     // 这些正是"频次可能不准"的信号，只在界面上闪一下会漏掉。
                     if let Ok(w) = st.active_warnings.lock() {
                         for msg in w.iter() {
@@ -2216,8 +2283,30 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 用户点小窗的关闭按钮时隐藏而不是销毁，并把焦点还回去
-            if window.label() == POPUP_LABEL {
+            // 主窗口关闭：默认收进系统托盘（常驻后台取词），不退出。
+            if window.label() == MAIN_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    let to_tray = window
+                        .app_handle()
+                        .state::<AppState>()
+                        .settings
+                        .lock()
+                        .map(|s| s.close_to_tray)
+                        .unwrap_or(true);
+                    if to_tray {
+                        api.prevent_close();
+                        let hid = window.hide();
+                        log_line(
+                            "startup.log",
+                            &format!("[tray] 主窗口 CloseRequested → prevent_close, hide() 返回 {:?}", hid),
+                        );
+                    } else {
+                        // 关主窗口＝退出（预留分支）：隐藏的小窗不该让进程继续常驻，主动退出
+                        window.app_handle().exit(0);
+                    }
+                }
+            } else if window.label() == POPUP_LABEL {
+                // 用户点小窗的关闭按钮时隐藏而不是销毁，并把焦点还回去
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     hide_popup_now(window.app_handle());
@@ -2244,7 +2333,7 @@ mod tests {
     const FRONTEND_SCAN_PARAMS: &str = r#"{
         "corpus": "E:/c",
         "out": "E:/o",
-        "dictFiles": ["主词库.dict", "补充.dict"],
+        "dictFiles": ["主词典.dict", "补充.dict"],
         "threads": 8,
         "hmm": false,
         "minCount": 1,
@@ -2263,10 +2352,10 @@ mod tests {
         assert_eq!(p.out, "E:/o");
         assert_eq!(p.threads, 8);
         assert!(!p.hmm);
-        // 词库链的顺序有意义（第一个是主词库），必须原样传过来
+        // 词典链的顺序有意义（第一个是主词典），必须原样传过来
         assert_eq!(
             p.dict_files,
-            vec!["主词库.dict".to_string(), "补充.dict".to_string()]
+            vec!["主词典.dict".to_string(), "补充.dict".to_string()]
         );
         assert_eq!(p.only_domains, vec!["news".to_string(), "wiki".to_string()]);
         assert!(p.write_tsv && p.keep_latin);
@@ -2282,7 +2371,7 @@ mod tests {
         assert!(p.keep_latin);
         assert!(!p.keep_digit);
         assert!(p.only_domains.is_empty());
-        // 一个词库都不指定 = 用数据文件夹里全部 .dict
+        // 一个词典都不指定 = 用数据文件夹里全部 .dict
         assert!(p.dict_files.is_empty());
     }
 
@@ -2361,7 +2450,7 @@ mod tests {
 
     #[test]
     fn curve_cache_key_changes_when_the_table_is_rebuilt_in_place() {
-        // 词表管理器提供「一键重新统计」，而重算常常写回**同一个目录**：
+        // 词频表管理器提供「一键重新统计」，而重算常常写回**同一个目录**：
         // 路径没变、数据全变了。键里必须带内容标识，否则重算之后曲线一直是旧的，
         // 而它正是「按覆盖率分组」的输入 —— 分组会跟着一起错，且完全看不出来。
         let root = Path::new("C:/data/tables/mine");
@@ -2382,9 +2471,9 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------- 扫描时选词库
+    // ---------------------------------------------------------------- 扫描时选词典
 
-    /// 造一个词库列表项。`broken=true` 表示文件读不了。
+    /// 造一个词典列表项。`broken=true` 表示文件读不了。
     fn fake_dict(file_name: &str, name: &str, broken: bool) -> DictItem {
         DictItem {
             dict: vocfreq_core::dict::DictRef {
@@ -2404,24 +2493,24 @@ mod tests {
     #[test]
     fn scan_dicts_accept_both_the_file_name_and_the_meta_name() {
         // 这是「重新统计」那条路的**关键契约**：
-        // 扫描页勾选给的是文件名（`预制词库.dict`），而重新统计是从产物 meta 里
-        // 读回 `tokenizer.dicts[].name`（`预制词库`，没有扩展名）。只认前者的话，
-        // 重算时勾选会全部落空、链变成空的 —— 用户看到的是"没有可用的词库"。
+        // 扫描页勾选给的是文件名（`预制词典.dict`），而重新统计是从产物 meta 里
+        // 读回 `tokenizer.dicts[].name`（`预制词典`，没有扩展名）。只认前者的话，
+        // 重算时勾选会全部落空、链变成空的 —— 用户看到的是"没有可用的词典"。
         let avail = vec![
-            fake_dict("预制词库.dict", "预制词库", false),
+            fake_dict("预制词典.dict", "预制词典", false),
             fake_dict("补充.dict", "补充", false),
         ];
 
-        let by_file = resolve_scan_dicts(&["预制词库.dict".into()], &avail);
-        let by_name = resolve_scan_dicts(&["预制词库".into()], &avail);
+        let by_file = resolve_scan_dicts(&["预制词典.dict".into()], &avail);
+        let by_name = resolve_scan_dicts(&["预制词典".into()], &avail);
         assert_eq!(by_file.len(), 1, "按文件名应命中");
         assert_eq!(by_name.len(), 1, "按 meta 里的名字（无扩展名）也必须命中");
-        assert_eq!(by_file, by_name, "两种写法应解析到同一份词库");
+        assert_eq!(by_file, by_name, "两种写法应解析到同一份词典");
     }
 
     #[test]
     fn scan_dicts_keep_the_selection_order() {
-        // 顺序有意义：第一个是主词库，后面的只做叠加，同名条目后者覆盖前者
+        // 顺序有意义：第一个是主词典，后面的只做叠加，同名条目后者覆盖前者
         let avail = vec![
             fake_dict("a.dict", "a", false),
             fake_dict("b.dict", "b", false),
@@ -2444,8 +2533,8 @@ mod tests {
         // 坏文件不能被选中（它连词条都读不出来）
         assert!(resolve_scan_dicts(&["坏.dict".into()], &avail).is_empty());
         // 勾了但一个都对不上 → 返回空表，由调用方报错。
-        // **不能**悄悄退化成"那就用全部词库"：用户会以为勾的那份生效了。
-        assert!(resolve_scan_dicts(&["根本不存在的词库".into()], &avail).is_empty());
+        // **不能**悄悄退化成"那就用全部词典"：用户会以为勾的那份生效了。
+        assert!(resolve_scan_dicts(&["根本不存在的词典".into()], &avail).is_empty());
         // 没勾才等于"用全部"（且跳过坏的）
         let all = resolve_scan_dicts(&[], &avail);
         assert_eq!(all.len(), 1);
@@ -2565,7 +2654,7 @@ mod tests {
         let s = st.settings_snapshot();
 
         assert!(s.user_dict.is_none(), "老字段必须清掉，否则每启动一次都提示一次");
-        assert!(s.scan_dicts.is_none(), "不该自作主张把它塞进词库链");
+        assert!(s.scan_dicts.is_none(), "不该自作主张把它塞进词典链");
         assert!(
             notes.iter().any(|n| n.contains("用户词典")),
             "要告诉用户他的词典去哪了：{notes:?}"
@@ -2576,7 +2665,7 @@ mod tests {
 
     #[test]
     fn table_keys_resolve_to_the_right_table() {
-        // 表管理器用「作用域/类型」字符串指代表，解析错了会静默查错表
+        // 表管理器用「表组/类型」字符串指代表，解析错了会静默查错表
         let Some(dir) = test_data_dir() else {
             skip_no_data("table_keys_resolve_to_the_right_table");
             return;
@@ -2587,21 +2676,21 @@ mod tests {
         };
         assert!(pick_by_key(&ds, "full/word").is_some());
         assert!(pick_by_key(&ds, "full/char").is_some());
-        // 作用域与类型必须**同时**对上：只给作用域或只给类型都不算命中
+        // 表组与类型必须**同时**对上：只给表组或只给类型都不算命中
         assert!(pick_by_key(&ds, "full").is_none(), "缺类型不该命中");
-        assert!(pick_by_key(&ds, "不存在的域/word").is_none());
-        // 词表与字表必须是不同的表，别解析成同一张
+        assert!(pick_by_key(&ds, "不存在的表组/word").is_none());
+        // 词频表与字表必须是不同的表，别解析成同一张
         let w = pick_by_key(&ds, "full/word").unwrap();
         let c = pick_by_key(&ds, "full/char").unwrap();
         assert_ne!(w.entries, c.entries);
         assert_eq!(c.vfr.kind(), vocfreq_core::query::KIND_CHAR);
 
-        // 分域对比现在按「作用域」取：每个作用域各有一张词表 + 一张字表
+        // 表组对比现在按「表组」取：每个表组各有一张词频表 + 一张字表
         for scope in ds.scopes() {
-            assert!(pick_table(&ds, Some(&scope), "word").is_some(), "作用域 {scope} 缺词表");
+            assert!(pick_table(&ds, Some(&scope), "word").is_some(), "表组 {scope} 缺词频表");
             assert!(
                 pick_table(&ds, Some(""), "word").is_some(),
-                "空 scope = 主作用域，必须能取到"
+                "空 scope = 主表组，必须能取到"
             );
         }
     }
@@ -2618,8 +2707,8 @@ mod tests {
             return;
         };
         let t0 = std::time::Instant::now();
-        // 曲线要按**主作用域**画（默认口径就是主作用域，见 format.ts::boundsInfo）
-        let table = ds.primary_table("word").expect("主作用域必须有词表");
+        // 曲线要按**主表组**画（默认口径就是主表组，见 format.ts::boundsInfo）
+        let table = ds.primary_table("word").expect("主表组必须有词频表");
         let curve = table.vfr.coverage_curve(400);
         let elapsed = t0.elapsed();
         assert!(curve.len() > 20, "曲线点数太少：{}", curve.len());
@@ -2644,13 +2733,13 @@ mod tests {
         }
         eprintln!("[curve] 覆盖率目标 -> 排名阈值: {targets:?} -> {ranks:?}");
 
-        // 默认口径是**前%**，所以主作用域上必须能直接算出前%上界
+        // 默认口径是**前%**，所以主表组上必须能直接算出前%上界
         let pct = ds
             .meta
             .table(&table.scope, "word")
             .map(|t| t.effective_tier_pct())
             .unwrap_or_default();
-        assert_eq!(pct.len(), 6, "主作用域的词表必须有 6 个前%上界");
+        assert_eq!(pct.len(), 6, "主表组的词频表必须有 6 个前%上界");
         let ranks = vocfreq_core::rank::ranks_from_pct(&pct, table.entries);
         for w in ranks.windows(2) {
             assert!(w[0] < w[1], "前%换算出来的阈值必须严格递增：{ranks:?}");

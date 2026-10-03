@@ -3,14 +3,14 @@
 //! 关键决策（`docs/DESIGN.md` §3）：
 //! * 默认 **关闭 HMM**：开启后同一实体在不同上下文可能被切成不同形态，导致频次被
 //!   拆散、排行不可复现。实测关闭时 jieba 只输出「词典命中的词 + 未命中的单字」。
-//! * 词库**外置**：不再有"编进 exe 的内置词典"这回事，分词器一律由一条**词库链**
+//! * 词典**外置**：不再有"编进 exe 的内置词典"这回事，分词器一律由一条**词典链**
 //!   建起来（[`Tokenizer::from_dicts`]），链的顺序有意义 —— 同名条目**后者覆盖前者**的
 //!   词频。链上每一份的身份（含 `sha256` 指纹）与读取报告都记在 [`Tokenizer::dicts`] /
 //!   [`Tokenizer::dict_reports`] 里，写进 `meta.json` 供之后校验。
 //! * 词典第三列是**分词用的概率权重**，不是词频（实测 45.6% 的条目权重都是保底值
 //!   3），因此稀有度一律由语料统计得出，不使用它。
 //!
-//! 词库文件的读取与校验**不在这里** —— 那部分在 [`crate::dict`]，它负责剥注释、按行报错、
+//! 词典文件的读取与校验**不在这里** —— 那部分在 [`crate::dict`]，它负责剥注释、按行报错、
 //! 算指纹，并把整份先读进内存再装进 jieba。这里只负责"把一条链装起来"与分词过滤。
 
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use crate::{Error, Result};
 
 /// 词条标记位。
 pub const FLAG_IN_DICT: u8 = 1 << 0;
-/// 该词来自**叠加词库**（词库链上除第一份之外的成员）。
+/// 该词来自**叠加词典**（词典链上除第一份之外的成员）。
 pub const FLAG_FROM_USER: u8 = 1 << 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,10 +72,10 @@ pub struct Segment {
 #[derive(Debug)]
 pub struct Tokenizer {
     jieba: Jieba,
-    /// 叠加词库带来的词（词库链上第 2 份及之后），用于标记 `from_user`。
+    /// 叠加词典带来的词（词典链上第 2 份及之后），用于标记 `from_user`。
     user_words: FxHashSet<Box<str>>,
     pub opts: TokenizeOpts,
-    /// 词库链，**按装载顺序**：`dicts[0]` 是主词库。每份都带内容指纹。
+    /// 词典链，**按装载顺序**：`dicts[0]` 是主词典。每份都带内容指纹。
     ///
     /// 它会被原样写进 `meta.json` 的 `tokenizer.dicts`，所以**不要**在别处再拼一份 ——
     /// 产物与运行时用的一定是同一份记录。
@@ -88,25 +88,25 @@ pub struct Tokenizer {
 /// `count_into` 的计数结果。
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct Counted {
-    /// 计入词表的 token 数
+    /// 计入词频表的 token 数
     pub words: u64,
     /// 计入字表的汉字数
     pub chars: u64,
 }
 
 impl Tokenizer {
-    /// 由**一条词库链**建分词器。链不能为空。
+    /// 由**一条词典链**建分词器。链不能为空。
     ///
-    /// 空链直接报错，而不是拿一份空词典跑出一张只有单字的废表：词库不再编进程序里了，
-    /// "没有词库"永远是配置问题，必须让用户看见。
+    /// 空链直接报错，而不是拿一份空词典跑出一张只有单字的废表：词典不再编进程序里了，
+    /// "没有词典"永远是配置问题，必须让用户看见。
     ///
     /// 顺序有意义：同名条目**后者覆盖前者**的词频（jieba 的既有语义），所以
-    /// `dicts[0]` 是主词库，其后都是叠加。第 2 份及之后的词会被标上
-    /// [`FLAG_FROM_USER`]（界面上叫「来自叠加词库」）。
+    /// `dicts[0]` 是主词典，其后都是叠加。第 2 份及之后的词会被标上
+    /// [`FLAG_FROM_USER`]（界面上叫「来自叠加词典」）。
     pub fn from_dicts(paths: &[PathBuf], opts: TokenizeOpts) -> Result<Self> {
         if paths.is_empty() {
             return Err(Error::Dict(
-                "没有词库：现在词库不再编进程序里，必须显式指定一条词库链（至少一份 .dict）。\
+                "没有词典：现在词典不再编进程序里，必须显式指定一条词典链（至少一份 .dict）。\
                  命令行用 --dict / --dict-dir，桌面端的数据文件夹里默认放在 dicts\\ 下。"
                     .into(),
             ));
@@ -118,7 +118,7 @@ impl Tokenizer {
         for (i, p) in paths.iter().enumerate() {
             let rd = dict::read_dict(p).map_err(|e| {
                 Error::Dict(format!(
-                    "装载词库链失败（第 {} 份 / 共 {} 份）：{e}",
+                    "装载词典链失败（第 {} 份 / 共 {} 份）：{e}",
                     i + 1,
                     paths.len()
                 ))
@@ -142,12 +142,12 @@ impl Tokenizer {
         })
     }
 
-    /// 单份词库的便捷入口（等价于长度为 1 的链）。
+    /// 单份词典的便捷入口（等价于长度为 1 的链）。
     pub fn from_dict(path: &Path, opts: TokenizeOpts) -> Result<Self> {
         Self::from_dicts(std::slice::from_ref(&path.to_path_buf()), opts)
     }
 
-    /// 词库链的一句话描述，写进日志（`meta.json` 里另有一份结构化记录）。
+    /// 词典链的一句话描述，写进日志（`meta.json` 里另有一份结构化记录）。
     pub fn dict_label(&self) -> String {
         dict::describe_chain(&self.dicts)
     }
@@ -175,7 +175,7 @@ impl Tokenizer {
         f
     }
 
-    /// 该 token 是否计入词表。
+    /// 该 token 是否计入词频表。
     ///
     /// 单趟遍历同时算出长度与字符类别。早期实现先 `chars().count()` 再遍历一次分类，
     /// 每个 token 要多走两遍字符；在 26 亿 token 的规模上这不是可以忽略的开销。
@@ -222,7 +222,7 @@ impl Tokenizer {
 
     /// 分词并把结果计入 `counts`，返回本次计入的 token 数与汉字数。
     ///
-    /// 字表**不受词过滤影响**：即使某个 token 因长度或类型被词表拒绝，其中的汉字
+    /// 字表**不受词过滤影响**：即使某个 token 因长度或类型被词频表拒绝，其中的汉字
     /// 仍会进字表，否则单字频率会因为过滤规则而失真。
     ///
     /// 返回计数而不是让调用方事后 `word_total()` 求和，是因为后者是 O(去重词数)，
@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use crate::dict::testutil::TempDict;
 
-    /// 主词库：让下面几句话的词能整词切出来（否则全是单字，没什么可测的）。
+    /// 主词典：让下面几句话的词能整词切出来（否则全是单字，没什么可测的）。
     fn main_dict() -> TempDict {
         TempDict::new(
             "tokenize-main",
@@ -285,7 +285,7 @@ mod tests {
     fn tk() -> (TempDict, Tokenizer) {
         let d = main_dict();
         let t =
-            Tokenizer::from_dict(d.path(), TokenizeOpts::default()).expect("单份词库应能建分词器");
+            Tokenizer::from_dict(d.path(), TokenizeOpts::default()).expect("单份词典应能建分词器");
         (d, t)
     }
 
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn hmm_off_leaves_oov_word_fragmented() {
-        // 「元宇宙」不在上面那份主词库里
+        // 「元宇宙」不在上面那份主词典里
         let (_d, t) = tk();
         let segs = t.segment("元宇宙概念");
         let joined: Vec<&str> = segs.iter().map(|s| s.text.as_str()).collect();
@@ -341,7 +341,7 @@ mod tests {
         let t = Tokenizer::from_dict(d.path(), opts).expect("建分词器");
         let mut c = LocalCounts::new();
         t.count_into("中", &mut c);
-        assert!(c.words.is_empty(), "单字词被词表过滤");
+        assert!(c.words.is_empty(), "单字词被词频表过滤");
         assert_eq!(c.chars['中' as usize], 1, "但字表仍应记到");
     }
 
@@ -369,19 +369,19 @@ mod tests {
         }
     }
 
-    // ------------------------------------------------------------ 词库链
+    // ------------------------------------------------------------ 词典链
 
     #[test]
     fn overlay_dict_words_get_the_from_user_flag() {
-        // 链的顺序有意义：主词库在前，叠加词库在后。叠加进来的词要能被认出来
-        // （界面上的「用户词典」标记），主词库里的词则不能因此被误标。
+        // 链的顺序有意义：主词典在前，叠加词典在后。叠加进来的词要能被认出来
+        // （界面上的「用户词典」标记），主词典里的词则不能因此被误标。
         let base = TempDict::new("chain-base", "中国 100 n\n");
         let overlay = TempDict::new("chain-overlay", "元宇宙 100 n\n");
         let t = Tokenizer::from_dicts(
             &[base.path().to_path_buf(), overlay.path().to_path_buf()],
             TokenizeOpts::default(),
         )
-        .expect("两份词库应能组成一条链");
+        .expect("两份词典应能组成一条链");
 
         assert_eq!(t.dicts.len(), 2, "链上两份都要记进 meta");
         assert_eq!(t.dict_reports.len(), 2, "报告与链同序、同长");
@@ -393,15 +393,15 @@ mod tests {
         for d in &t.dicts {
             assert!(d.is_verifiable(), "{} 应当带 sha256", d.name);
         }
-        // 叠加词库里的词：在词典里、且标为来自叠加
+        // 叠加词典里的词：在词典里、且标为来自叠加
         assert!(t.has_word("元宇宙"));
         assert!(t.is_user_word("元宇宙"));
         assert_eq!(t.flags("元宇宙"), FLAG_IN_DICT | FLAG_FROM_USER);
-        // 主词库里的词：在词典里，但**不是**来自叠加
+        // 主词典里的词：在词典里，但**不是**来自叠加
         assert!(t.has_word("中国"));
         assert!(!t.is_user_word("中国"));
         assert_eq!(t.flags("中国"), FLAG_IN_DICT);
-        // 词库链的一句话描述要能列全（写进日志用）
+        // 词典链的一句话描述要能列全（写进日志用）
         let label = t.dict_label();
         assert!(
             label.contains("chain-base") && label.contains("chain-overlay"),
@@ -426,9 +426,9 @@ mod tests {
 
     #[test]
     fn empty_chain_is_rejected_loudly() {
-        // 词库不再编进程序里了，"没有词库"永远是配置问题，必须报错而不是跑出一张废表
+        // 词典不再编进程序里了，"没有词典"永远是配置问题，必须报错而不是跑出一张废表
         let e = Tokenizer::from_dicts(&[], TokenizeOpts::default()).expect_err("空链必须报错");
-        assert!(e.to_string().contains("没有词库"), "{e}");
+        assert!(e.to_string().contains("没有词典"), "{e}");
     }
 
     #[test]
@@ -440,7 +440,7 @@ mod tests {
             &[good.path().to_path_buf(), bad.path().to_path_buf()],
             TokenizeOpts::default(),
         )
-        .expect_err("坏词库必须报错");
+        .expect_err("坏词典必须报错");
         let msg = e.to_string();
         assert!(msg.contains("第 2 份"), "要指出是哪一份：{msg}");
         assert!(msg.contains("共 2 份"), "{msg}");

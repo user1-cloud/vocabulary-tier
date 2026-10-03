@@ -1,11 +1,11 @@
-//! 数据文件夹：**词库库**与**词表库**。
+//! 数据文件夹：**词典库**与**词频表库**。
 //!
-//! 从"词库编在 exe 里、词频表由用户随手指一个目录"改成下面这套模型：
+//! 从"词典编在 exe 里、词频表由用户随手指一个目录"改成下面这套模型：
 //!
 //! ```text
 //! <数据文件夹>            ← 设置里可改，默认 %LOCALAPPDATA%\com.voctier.desktop\data
 //!   dicts\
-//!     <名字>.dict         ← 一个词库就是一个文件，随便增删改
+//!     <名字>.dict         ← 一个词典就是一个文件，随便增删改
 //!   tables\
 //!     <名字>\             ← 一张表就是一个产物目录
 //!       meta.json  full\*.vfr  domains\*.vfr
@@ -16,11 +16,11 @@
 //! 1. **预置的和用户自建的没有本质区别。** 安装包只是"帮你放了两个进去"，
 //!    它们和用户自己新建的完全是同一种东西，同样可删可改名可替换。所以这里
 //!    没有 `builtin` 之类的权限位，只有一个纯展示用的 [`Origin`]。
-//! 2. **表与词库用内容指纹绑定，不是一个路径字符串。** 路径换台机器就失效，
-//!    指纹不会。所以匹配顺序是「指纹 → 名字」：用户把词库文件改个名、但内容没变，
-//!    表照样能用；内容变了则判为"已漂移"。词库**统一住在数据文件夹的 `dicts\` 里**，
+//! 2. **表与词典用内容指纹绑定，不是一个路径字符串。** 路径换台机器就失效，
+//!    指纹不会。所以匹配顺序是「指纹 → 名字」：用户把词典文件改个名、但内容没变，
+//!    表照样能用；内容变了则判为"已漂移"。词典**统一住在数据文件夹的 `dicts\` 里**，
 //!    不追记录里那个可能早已失效的绝对路径 —— 那正是"统一放到一个文件夹"的意义。
-//! 3. **每个失败都要说出来。** 坏的词库文件、绑不上的表、v1 老产物，都要带着
+//! 3. **每个失败都要说出来。** 坏的词典文件、绑不上的表、v1 老产物，都要带着
 //!    具体原因出现在列表里，而不是被静默跳过 —— 用户得能看见"这个文件坏了"。
 
 use std::collections::BTreeMap;
@@ -31,16 +31,16 @@ use serde::{Deserialize, Serialize};
 use vocfreq_core::artifact::Meta;
 use vocfreq_core::dict::{self, DictLoadReport, DictRef};
 
-/// 数据文件夹里放词库的子目录名。
+/// 数据文件夹里放词典的子目录名。
 pub const DICTS_DIR: &str = "dicts";
-/// 数据文件夹里放词表的子目录名。
+/// 数据文件夹里放词频表的子目录名。
 pub const TABLES_DIR: &str = "tables";
 
 // ===========================================================================
 // 展示用的来源标记
 // ===========================================================================
 
-/// 这个词库/词表是怎么来的。**纯展示用**，不挂任何行为 —— 预置项同样可以删除。
+/// 这个词典/词频表是怎么来的。**纯展示用**，不挂任何行为 —— 预置项同样可以删除。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
@@ -55,10 +55,10 @@ pub enum Origin {
 }
 
 // ===========================================================================
-// 词库
+// 词典
 // ===========================================================================
 
-/// 词库列表里的一项。
+/// 词典列表里的一项。
 #[derive(Debug, Clone, Serialize)]
 pub struct DictItem {
     pub dict: DictRef,
@@ -66,7 +66,7 @@ pub struct DictItem {
     /// "我明明放进去了怎么没有"，永远发现不了文件本身有问题。
     pub error: Option<String>,
     pub report: DictLoadReport,
-    /// 词库文件名（`dicts\` 下的相对名），改名/删除都靠它定位
+    /// 词典文件名（`dicts\` 下的相对名），改名/删除都靠它定位
     pub file_name: String,
     pub origin: Origin,
 }
@@ -79,27 +79,27 @@ impl DictItem {
 }
 
 // ===========================================================================
-// 词表
+// 词频表
 // ===========================================================================
 
-/// 表与它所记录的词库链之间的绑定状态。
+/// 表与它所记录的词典链之间的绑定状态。
 ///
-/// 这是词库外置之后**必须**有的一块：词库可以由用户随手改，改了以后旧表的
-/// 频次就跟分词口径对不上了。以前词库编在 exe 里，没有这个问题，也就没有这个概念。
+/// 这是词典外置之后**必须**有的一块：词典可以由用户随手改，改了以后旧表的
+/// 频次就跟分词口径对不上了。以前词典编在 exe 里，没有这个问题，也就没有这个概念。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Binding {
-    /// 记录里的词库都能在当前数据文件夹里对上（指纹一致）
+    /// 记录里的词典都能在当前数据文件夹里对上（指纹一致）
     Ok,
     /// v1 老产物：只留了一句自由文本描述，没有指纹，**无从判断**
     Legacy,
-    /// 内容变了（同一个词库被改过）
+    /// 内容变了（同一个词典被改过）
     Drifted { changed: Vec<String> },
     /// 找不到了
     Missing { missing: Vec<String> },
 }
 
-/// 词表列表里的一项。
+/// 词频表列表里的一项。
 #[derive(Debug, Clone, Serialize)]
 pub struct TableItem {
     pub name: String,
@@ -160,9 +160,9 @@ impl Library {
         std::fs::create_dir_all(self.tables_dir())
     }
 
-    /// 列出全部词库。
+    /// 列出全部词典。
     ///
-    /// ⚠ 会**完整读取并解析**每个 `.dict`（一份 4.84 MB 的 jieba 词库约 50–100 ms），
+    /// ⚠ 会**完整读取并解析**每个 `.dict`（一份 4.84 MB 的 jieba 词典约 50–100 ms），
     /// 因为列表要显示有效词条数、注释行数、以及"多少条显式写了 0"这类隐患，
     /// 不读就说不出来。界面应当按需调用并缓存，不要每次重渲染都调。
     pub fn list_dicts(&self) -> Vec<DictItem> {
@@ -202,10 +202,10 @@ impl Library {
         out
     }
 
-    /// 列出数据文件夹 `tables\` 下的全部词表。
+    /// 列出数据文件夹 `tables\` 下的全部词频表。
     ///
-    /// `current` 是 [`Self::list_dicts`] 的结果 —— 拿它判断每张表记录的词库链
-    /// 现在是否还对得上。传进来而不是在这里重算，是为了避免把每个词库再哈希一遍。
+    /// `current` 是 [`Self::list_dicts`] 的结果 —— 拿它判断每张表记录的词典链
+    /// 现在是否还对得上。传进来而不是在这里重算，是为了避免把每个词典再哈希一遍。
     pub fn list_tables(&self, current: &[DictItem], active: Option<&str>) -> Vec<TableItem> {
         let Ok(rd) = std::fs::read_dir(self.tables_dir()) else {
             return Vec::new();
@@ -228,10 +228,10 @@ impl Library {
             .collect()
     }
 
-    /// 把一份词库文件复制进数据文件夹，返回落地后的文件名。
+    /// 把一份词典文件复制进数据文件夹，返回落地后的文件名。
     ///
     /// 重名时**自动加后缀，绝不覆盖** —— 用户可能正拿旧的那份跑着统计，
-    /// 悄悄替换掉会让他下一次打开表时莫名其妙地"词库已变"。
+    /// 悄悄替换掉会让他下一次打开表时莫名其妙地"词典已变"。
     pub fn import_dict(&self, src: &Path) -> Result<String, String> {
         self.ensure().map_err(|e| format!("建数据文件夹失败：{e}"))?;
         if !src.is_file() {
@@ -239,7 +239,7 @@ impl Library {
         }
         if !dict::is_dict_file(src) {
             return Err(format!(
-                "{} 不是词库文件（词库必须用 .dict 扩展名，内容为 jieba 的「词 词频 词性」）",
+                "{} 不是词典文件（词典必须用 .dict 扩展名，内容为 jieba 的「词 词频 词性」）",
                 src.display()
             ));
         }
@@ -259,7 +259,7 @@ impl Library {
         Ok(name)
     }
 
-    /// 删掉一份词库。返回被删的文件名。
+    /// 删掉一份词典。返回被删的文件名。
     pub fn delete_dict(&self, file_name: &str) -> Result<(), String> {
         let p = self.dict_path(file_name);
         if !p.exists() {
@@ -317,14 +317,14 @@ pub fn table_item(dir: &Path, current: &[DictItem], active: bool, in_library: bo
     };
 
     // 老布局（schema < 3）：表按 `full/word`、`domains/news/word` 这种"路径"组织，
-    // 磁盘上是 `full/` 与 `domains/` 两棵树。新读取端按"每个作用域一个目录"去找，
+    // 磁盘上是 `full/` 与 `domains/` 两棵树。新读取端按"每个表组一个目录"去找，
     // 硬读只会得到一句「文件不存在」。所以**认出它并说清楚要重扫**，不要让它以
     // 一个莫名其妙的错误出现在列表里。
     if let Some(e) = legacy_layout_error(&meta, dir) {
         return broken(e);
     }
 
-    // 至少要有**一张**能查的表（词表）。缺了也常见（拷贝中断、被误删），要单独说清楚。
+    // 至少要有**一张**能查的表（词频表）。缺了也常见（拷贝中断、被误删），要单独说清楚。
     let missing: Vec<String> = meta
         .tables
         .iter()
@@ -337,7 +337,7 @@ pub fn table_item(dir: &Path, current: &[DictItem], active: bool, in_library: bo
             missing.join("、")
         ))
     } else if meta.tables.iter().all(|t| t.kind != "word") {
-        Some("这张表里一张词表都没有，查不了词".to_string())
+        Some("这张表里一张词频表都没有，查不了词".to_string())
     } else {
         None
     };
@@ -356,7 +356,7 @@ pub fn table_item(dir: &Path, current: &[DictItem], active: bool, in_library: bo
 }
 
 // ===========================================================================
-// 绑定判定与词库链解析
+// 绑定判定与词典链解析
 // ===========================================================================
 
 /// 认出「schema v3 之前的老布局」，返回一句可操作的说法。
@@ -364,11 +364,11 @@ pub fn table_item(dir: &Path, current: &[DictItem], active: bool, in_library: bo
 /// 判据是**磁盘上真的有老布局的目录**，而不是只看 `schema_version`
 /// （那只是个提示性字段，用户手改过 meta 也不能因此把一个能用的目录判死）：
 ///
-/// * 有 `domains\` 目录 —— v2 的分域表住在这儿；
-/// * 或 `full\word`、`full\char` 这种**目录** —— v2 把 `<作用域>/<类型>` 当路径用，
+/// * 有 `domains\` 目录 —— v2 的表组住在这儿；
+/// * 或 `full\word`、`full\char` 这种**目录** —— v2 把 `<表组>/<类型>` 当路径用，
 ///   于是 `full/word.vfr` 变成了 `full/word/` 下面还有东西。
 ///
-/// v3 的布局是 `<作用域>/word.vfr`，两者一眼可分。
+/// v3 的布局是 `<表组>/word.vfr`，两者一眼可分。
 fn legacy_layout_error(meta: &Meta, dir: &Path) -> Option<String> {
     let has_domains_dir = dir.join("domains").is_dir();
     let nested = meta
@@ -379,21 +379,21 @@ fn legacy_layout_error(meta: &Meta, dir: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "这是 schema v{} 的老布局产物（表按 full/word、domains/域/word 这样的路径组织）。\
-         现在每个**作用域**各占一个目录、彼此平级，所以这份产物读不了，也无法就地迁移。\
-         请用同一套语料库与词库重新统计一次。",
+        "这是 schema v{} 的老布局产物（表按 full/word、domains/表组/word 这样的路径组织）。\
+         现在每个**表组**各占一个目录、彼此平级，所以这份产物读不了，也无法就地迁移。\
+         请用同一套语料库与词典重新统计一次。",
         meta.schema_version
     ))
 }
 
-/// 判断一张表记录的词库链对现在的词库库还成不成立。
+/// 判断一张表记录的词典链对现在的词典库还成不成立。
 ///
 /// * **一条可校验的记录都没有**（v1 老产物，或记录里全是没指纹的自由文本）→
-///   [`Binding::Legacy`]。这**不是错误**：当年词库编在 exe 里，根本没有记录的必要。
+///   [`Binding::Legacy`]。这**不是错误**：当年词典编在 exe 里，根本没有记录的必要。
 ///   注意判据是"有没有指纹"而不是"记录列表空不空" —— v1 的 `dict` 字段反序列化
 ///   出来是一条没有指纹的记录，列表非空，但它说明不了任何事。
-/// * 每条记录都能按指纹或名字在当前词库里找到 → [`Binding::Ok`]
-/// * 找到了但指纹不同 → [`Binding::Drifted`]（典型场景：用户改了那份词库）
+/// * 每条记录都能按指纹或名字在当前词典里找到 → [`Binding::Ok`]
+/// * 找到了但指纹不同 → [`Binding::Drifted`]（典型场景：用户改了那份词典）
 /// * 找不到 → [`Binding::Missing`]（用户把它删了）
 ///
 /// 只要有 Drifted 或 Missing 就属于"这张表的频次可能已经对不上分词口径"，
@@ -426,12 +426,12 @@ pub fn binding_of(meta: &Meta, current: &[DictItem]) -> Binding {
     }
 }
 
-/// 把一张表记录的词库链解析成**当前数据文件夹里**的实际路径。
+/// 把一张表记录的词典链解析成**当前数据文件夹里**的实际路径。
 ///
 /// 返回的 `paths` 按记录顺序排列，供 [`vocfreq_core::tokenize::Tokenizer::from_dicts`]
 /// 重建分词器 —— 顺序不能乱，否则同名条目的覆盖结果会变。
 ///
-/// 只要能按指纹匹配上就按指纹匹配：用户把词库改个名、挪个子目录，表照样能用。
+/// 只要能按指纹匹配上就按指纹匹配：用户把词典改个名、挪个子目录，表照样能用。
 pub fn resolve_chain(recorded: &[DictRef], current: &[DictItem]) -> Vec<PathBuf> {
     recorded
         .iter()
@@ -439,14 +439,14 @@ pub fn resolve_chain(recorded: &[DictRef], current: &[DictItem]) -> Vec<PathBuf>
         .collect()
 }
 
-/// 在当前词库里找一条记录对应的词库。
+/// 在当前词典里找一条记录对应的词典。
 ///
 /// 返回 `(命中项, 指纹是否精确一致)`。匹配顺序：**指纹 → 名字**。
 ///
-/// 故意**不**回退到记录里的绝对路径：词库统一住在数据文件夹的 `dicts\` 里，
+/// 故意**不**回退到记录里的绝对路径：词典统一住在数据文件夹的 `dicts\` 里，
 /// 追一个可能早已失效、也可能指向别处同名文件的旧路径，会让"绑定判定"和
 /// "实际解析"给出互相矛盾的结论（一边说 Missing、一边又解析成功了）。
-/// 用户把词库放在文件夹之外时，导入进来就是了。
+/// 用户把词典放在文件夹之外时，导入进来就是了。
 fn find_dict<'a>(rec: &DictRef, current: &'a [DictItem]) -> Option<(&'a DictItem, bool)> {
     // 1) 指纹一致（最可靠）
     if rec.is_verifiable() {
@@ -457,7 +457,7 @@ fn find_dict<'a>(rec: &DictRef, current: &'a [DictItem]) -> Option<(&'a DictItem
             return Some((it, true));
         }
     }
-    // 2) 名字一致（词库被改过 → 指纹不同，但仍是"同一份"，算 Drifted）
+    // 2) 名字一致（词典被改过 → 指纹不同，但仍是"同一份"，算 Drifted）
     current
         .iter()
         .find(|it| it.usable() && !it.dict.name.is_empty() && it.dict.name == rec.name)
@@ -470,8 +470,8 @@ fn find_dict<'a>(rec: &DictRef, current: &'a [DictItem]) -> Option<(&'a DictItem
 
 /// 来源标记存在一个同名 sidecar 文件里（`<名字>.origin`）。
 ///
-/// 为什么不塞进词库文件本身：那会在词库里加一行 `#` 注释，用户手改一次就可能
-/// 弄丢；而且"来源"是**安装包与用户操作**的属性，不是词库内容的属性 ——
+/// 为什么不塞进词典文件本身：那会在词典里加一行 `#` 注释，用户手改一次就可能
+/// 弄丢；而且"来源"是**安装包与用户操作**的属性，不是词典内容的属性 ——
 /// 内容改了指纹就该变，来源却不该因为改了一个字就变成 Imported。
 fn origin_sidecar(p: &Path) -> PathBuf {
     let mut s = p.as_os_str().to_os_string();
@@ -542,9 +542,9 @@ pub fn sanitize_table_name(raw: &str) -> String {
     s
 }
 
-/// 一组词库按文件名排序后作为默认词库链。
+/// 一组词典按文件名排序后作为默认词典链。
 ///
-/// 返回 `BTreeMap` 是为了顺序确定 —— 词库链的顺序会影响同名条目的覆盖结果，
+/// 返回 `BTreeMap` 是为了顺序确定 —— 词典链的顺序会影响同名条目的覆盖结果，
 /// 顺序飘了，同一批文件就会跑出不同的表。
 pub fn default_chain(dicts: &[DictItem]) -> Vec<PathBuf> {
     let mut m: BTreeMap<&str, &DictItem> = BTreeMap::new();
@@ -569,9 +569,9 @@ mod tests {
             use std::io::Write as _;
             let mut p = std::env::temp_dir();
             p.push(format!("vocfreq-lib-test-{}-{name}.dict", std::process::id()));
-            let mut f = std::fs::File::create(&p).expect("建临时词库");
-            f.write_all(body.as_bytes()).expect("写临时词库");
-            f.flush().expect("刷临时词库");
+            let mut f = std::fs::File::create(&p).expect("建临时词典");
+            f.write_all(body.as_bytes()).expect("写临时词典");
+            f.flush().expect("刷临时词典");
             TempDict(p)
         }
 
@@ -586,7 +586,7 @@ mod tests {
         }
     }
 
-    /// 造一个数据文件夹，里面放指定的词库文件。
+    /// 造一个数据文件夹，里面放指定的词典文件。
     fn lib_with_dicts(name: &str, dicts: &[(&str, &str)]) -> (PathBuf, Library, Vec<TempDict>) {
         let root = std::env::temp_dir().join(format!("vocfreq-lib-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -696,7 +696,7 @@ mod tests {
         let meta = meta_with_dicts(&[rec]);
         match binding_of(&meta, &current) {
             Binding::Missing { missing } => assert_eq!(missing, vec!["已经删掉的那份".to_string()]),
-            other => panic!("删掉的词库应判为 Missing，实际 {other:?}"),
+            other => panic!("删掉的词典应判为 Missing，实际 {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -745,8 +745,8 @@ mod tests {
         assert!(lib.import_dict(&bad).is_err());
         assert!(!lib.dict_path("坏.dict").exists(), "坏文件不能落地");
 
-        // 非 .dict 扩展名也拒绝（否则 README 之类也会被当词库）
-        let wrong = src_dir.join("其实不是词库.txt");
+        // 非 .dict 扩展名也拒绝（否则 README 之类也会被当词典）
+        let wrong = src_dir.join("其实不是词典.txt");
         std::fs::write(&wrong, "甲 10\n").unwrap();
         assert!(lib.import_dict(&wrong).is_err());
 
@@ -800,7 +800,7 @@ mod tests {
         let (root, lib, _keep) = lib_with_dicts("tables", &[("甲.dict", "甲 10\n")]);
 
         // 一张结构正常的表（v1 meta，因此 binding=Legacy；这里只验证"能被列出来"
-        // 与"不报结构性错误"）。布局必须是 v3 的：`<作用域>/<类型>.vfr`。
+        // 与"不报结构性错误"）。布局必须是 v3 的：`<表组>/<类型>.vfr`。
         let ok = lib.table_dir("完整表");
         std::fs::create_dir_all(ok.join("full")).unwrap();
         std::fs::write(ok.join("meta.json"), v3_meta_json(&["full"])).unwrap();
@@ -830,7 +830,7 @@ mod tests {
         let t = tables.iter().find(|t| t.name == "完整表").unwrap();
         assert!(t.error.is_none(), "结构正常的表不该被标错：{:?}", t.error);
         assert!(t.active, "应认出激活的那张");
-        assert_eq!(t.binding, Binding::Legacy, "v1 meta 无从校验词库");
+        assert_eq!(t.binding, Binding::Legacy, "v1 meta 无从校验词典");
 
         let t = tables.iter().find(|t| t.name == "半截表").unwrap();
         assert!(
@@ -853,7 +853,7 @@ mod tests {
 
     // ---------------------------------------------------------------- 测试辅助
 
-    /// 一份 **v3 新布局**的 meta：每个作用域各一条 word/char 记录。
+    /// 一份 **v3 新布局**的 meta：每个表组各一条 word/char 记录。
     fn v3_meta_json(scopes: &[&str]) -> String {
         let pct = [0.0026, 0.026, 0.132, 0.526, 1.32, 3.95];
         let tiers: Vec<serde_json::Value> = pct

@@ -149,7 +149,7 @@ export async function planCorpus(corpus: string): Promise<Result<CorpusPlan>> {
 }
 
 // ---------------------------------------------------------------------------
-// 数据文件夹：词库管理（dicts\）+ 词表管理（tables\）
+// 数据文件夹：词典管理（dicts\）+ 词频表管理（tables\）
 //
 // 契约提醒（**入参 camelCase、出参 snake_case**）：
 //   - `dict_delete` 的 Rust 参数名是 `file_name`，Tauri 会转成 camelCase，
@@ -159,7 +159,7 @@ export async function planCorpus(corpus: string): Promise<Result<CorpusPlan>> {
 //     与 `$lib/types.ts::LibraryInfo` 等一一对应，不做映射。
 // ---------------------------------------------------------------------------
 
-/** 数据文件夹的整体状况（词库列表 + 词表列表都由它给的信息定位） */
+/** 数据文件夹的整体状况（词典列表 + 词频表列表都由它给的信息定位） */
 export async function libraryInfo(): Promise<Result<LibraryInfo>> {
   if (!isTauri()) return { ok: true, data: MOCK.libraryInfo() };
   return call<LibraryInfo>('library_info');
@@ -169,7 +169,7 @@ export async function libraryInfo(): Promise<Result<LibraryInfo>> {
  * 换数据文件夹。
  *
  * 后端只建目录、**不搬运**已有内容，并且会把「当前激活的表」清掉（换了文件夹
- * 就是换了一整套词库与词表）。所以调用方拿到新 `LibraryInfo` 后应当重新拉
+ * 就是换了一整套词典与词频表）。所以调用方拿到新 `LibraryInfo` 后应当重新拉
  * `dict_list()` 与 `table_list()`。
  */
 export async function setDataDir(dir: string): Promise<Result<LibraryInfo>> {
@@ -184,10 +184,10 @@ export async function ensureDataDirs(): Promise<Result<string>> {
 }
 
 /**
- * 数据文件夹里有没有**可用**的词库。
+ * 数据文件夹里有没有**可用**的词典。
  *
- * 扫描页用它决定要不要挡住「开始统计」：词库外置之后没有内置兜底，
- * 空词库跑出来的是一张只有单字的废表，还不如不让用户点。
+ * 扫描页用它决定要不要挡住「开始统计」：词典外置之后没有内置兜底，
+ * 空词典跑出来的是一张只有单字的废表，还不如不让用户点。
  */
 export async function libraryReady(): Promise<Result<boolean>> {
   if (!isTauri()) return { ok: true, data: MOCK.libraryReady() };
@@ -195,9 +195,9 @@ export async function libraryReady(): Promise<Result<boolean>> {
 }
 
 /**
- * 列出数据文件夹里的全部词库。
+ * 列出数据文件夹里的全部词典。
  *
- * ⚠ 后端会**完整读取并解析**每个 `.dict`（一份 jieba 词库约 50–100 ms，会算
+ * ⚠ 后端会**完整读取并解析**每个 `.dict`（一份 jieba 词典约 50–100 ms，会算
  * sha256）。界面按需调用并缓存结果，**别在每次重渲染时都调**。
  */
 export async function dictList(): Promise<Result<DictItem[]>> {
@@ -214,10 +214,10 @@ export async function dictImport(path: string): Promise<Result<string>> {
 }
 
 /**
- * 删掉一份词库（只删数据文件夹里那一个文件）。
+ * 删掉一份词典（只删数据文件夹里那一个文件）。
  *
  * **没有任何权限等级**：后端没有 builtin 之类的权限位，「预置」只是个展示徽标。
- * 但删掉被引用的词库会让那些表变成「词库缺失」，所以调用方必须先确认。
+ * 但删掉被引用的词典会让那些表变成「词典缺失」，所以调用方必须先确认。
  */
 export async function dictDelete(fileName: string): Promise<Result<null>> {
   if (!isTauri()) {
@@ -227,7 +227,7 @@ export async function dictDelete(fileName: string): Promise<Result<null>> {
   return call<null>('dict_delete', { fileName });
 }
 
-/** 列出词表：数据文件夹里的全部 + 数据文件夹之外那张激活的（如果有） */
+/** 列出词频表：数据文件夹里的全部 + 数据文件夹之外那张激活的（如果有） */
 export async function tableList(): Promise<Result<TableItem[]>> {
   if (!isTauri()) return { ok: true, data: MOCK.tableList() };
   const res = await call<TableItem[]>('table_list');
@@ -235,7 +235,7 @@ export async function tableList(): Promise<Result<TableItem[]>> {
   return { ok: true, data: res.data ?? [] };
 }
 
-/** 激活数据文件夹里的一张表；返回它的 meta（同时后端按记录的词库链重建分词器） */
+/** 激活数据文件夹里的一张表；返回它的 meta（同时后端按记录的词典链重建分词器） */
 export async function activateLibraryTable(name: string): Promise<Result<Meta>> {
   if (!isTauri()) return MOCK.activateLibraryTable(name);
   const res = await call<Meta>('activate_library_table', { name });
@@ -259,7 +259,7 @@ export async function tableDelete(name: string): Promise<Result<null>> {
 }
 
 /**
- * 换**主词频表**：指定哪个作用域回答"这个词有多常见"。
+ * 换**主词频表**：指定哪个表组回答"这个词有多常见"。
  *
  * 粒度是全局的：划句分析、排行榜、分组阈值都必须跟着换，否则同一句话在两个页面
  * 会显示成两种颜色。后端会重开一次数据集并把新的 meta 返回回来。
@@ -269,7 +269,7 @@ export async function setPrimaryScope(scope: string): Promise<Result<Meta>> {
     const meta = MOCK.activeDataset();
     if (!meta) return { ok: false, error: t('bridge.noMeta') };
     if (!meta.tables.some((entry) => entry.path === scope)) {
-      return { ok: false, error: `演示数据里没有作用域「${scope}」` };
+      return { ok: false, error: `演示数据里没有表组「${scope}」` };
     }
     return { ok: true, data: meta };
   }
@@ -280,9 +280,9 @@ export async function setPrimaryScope(scope: string): Promise<Result<Meta>> {
 }
 
 /**
- * 把若干张表**相加**成一张新表（同一份产物目录里的另一个作用域）。
+ * 把若干张表**相加**成一张新表（同一份产物目录里的另一个表组）。
  *
- * 相加在数学上是精确的：`scan` 本身就是"逐作用域扫完再累加"，所以各作用域表相加
+ * 相加在数学上是精确的：`scan` 本身就是"逐表组扫完再累加"，所以各表组表相加
  * 逐条等于全量扫描出来的那张表。新表与别的表完全平级 —— 能当主表、能再被相加。
  */
 export async function composeTables(
@@ -296,7 +296,7 @@ export async function composeTables(
  * 给一张新表算默认的输出目录：`<数据文件夹>\tables\<洗过的名字>`。
  *
  * 扫描页用它预填输出路径，用户仍可改成任意位置（落到数据文件夹之外的产物目录
- * 会以 `in_library: false` 出现在词表列表里，同样能用）。
+ * 会以 `in_library: false` 出现在词频表列表里，同样能用）。
  */
 export async function suggestTableDir(name: string): Promise<Result<string>> {
   if (!isTauri()) return { ok: true, data: MOCK.suggestTableDir(name) };
@@ -574,6 +574,8 @@ export function defaultSettings(): Settings {
     popupOpacity: 0.96,
     popupAlwaysOnTop: true,
     popupAutoCloseMs: 0,
+    // 预留：关主窗口收进托盘（界面未提供开关，恒为 true）
+    closeToTray: true,
     theme: 'system',
     locale: 'zh-CN',
     threads: 0,
@@ -581,17 +583,17 @@ export function defaultSettings(): Settings {
     keepDigit: true,
     keepLatin: true,
     skipSingleChar: false,
-    // 词库链：null / 空数组 = 用数据文件夹里全部 `.dict`（按文件名排序）
+    // 词典链：null / 空数组 = 用数据文件夹里全部 `.dict`（按文件名排序）
     scanDicts: null,
     activeTable: null,
     activeTablePath: null,
     minCount: 1,
     skipDomainTables: false,
-    // 全作用域平等：谁当"主表"由 primaryScope 决定，默认 full（没有 full 就用第一个）
+    // 全表组平等：谁当"主表"由 primaryScope 决定，默认 full（没有 full 就用第一个）
     primaryScope: null,
     // `enabledTables` 已废弃（留着只为读老设置），新代码不再写它
     enabledTables: null,
-    // 分组默认按**前%**：排名绝对值跨表不可比，而任意作用域都能当主表
+    // 分组默认按**前%**：排名绝对值跨表不可比，而任意表组都能当主表
     tierMethod: 'top_pct',
     tierWordBounds: null,
     tierCharBounds: null,
@@ -810,7 +812,7 @@ export async function pickDirectory(title = t('bridge.pickDirectory')): Promise<
   }
 }
 
-/** 选文件；用户取消返回 null。`filters` 用于限制扩展名（例如词库只认 `*.dict`） */
+/** 选文件；用户取消返回 null。`filters` 用于限制扩展名（例如词典只认 `*.dict`） */
 export async function pickFile(
   title = t('bridge.pickFile'),
   filters?: { name: string; extensions: string[] }[]
@@ -861,7 +863,7 @@ type MockEntry = { rank: number; word: string; count: number; tier: number };
 
 /**
  * 演示用的词条表。按档位递减排列，分组与 crates/vocfreq-core/src/rank.rs
- * 的默认词表阈值（500 / 3000 / 10000 / 30000 / 80000 / 200000）对应。
+ * 的默认词频表阈值（500 / 3000 / 10000 / 30000 / 80000 / 200000）对应。
  */
 const MOCK_WORDS: MockEntry[] = [
   { rank: 1, word: '的', count: 412306, tier: 0 },
@@ -909,7 +911,7 @@ const MOCK_WORDS: MockEntry[] = [
   { rank: 43, word: '阈值', count: 9912, tier: 3 },
   { rank: 44, word: '排名', count: 9203, tier: 3 },
   { rank: 45, word: '字表', count: 8411, tier: 3 },
-  { rank: 46, word: '词表', count: 7712, tier: 3 },
+  { rank: 46, word: '词频表', count: 7712, tier: 3 },
   { rank: 47, word: '未收录', count: 4312, tier: 4 },
   { rank: 48, word: '虚词', count: 3910, tier: 4 },
   { rank: 49, word: '停顿', count: 3521, tier: 4 },
@@ -984,12 +986,12 @@ const MOCK_CHARS: MockEntry[] = [
 ];
 
 /**
- * 演示用的分域。真实产物是「全库 + 7 个分域」，这里也放 7 个，
+ * 演示用的表组。真实产物是「全库 + 7 个表组」，这里也放 7 个，
  * 这样「表管理」页在浏览器里能完整看到 2 × 8 = 16 张表。
  */
 const MOCK_DOMAIN_NAMES = ['blog', 'book', 'forum', 'gov', 'news', 'parallel', 'wiki'];
 
-/** 分域的中文说明（只用于 planCorpus 的展示，不影响表路径） */
+/** 表组的中文说明（只用于 planCorpus 的展示，不影响表路径） */
 const MOCK_DOMAIN_LABELS: Record<string, string> = {
   blog: '博客',
   book: '图书',
@@ -1002,7 +1004,7 @@ const MOCK_DOMAIN_LABELS: Record<string, string> = {
 
 /**
  * 演示数据的分组阈值 —— 与 Rust 侧 `vocfreq_core::rank::default_word_tiers()`
- * / `default_char_tiers()` 保持一致（词表 100/1000/5000/20000/50000/150000，
+ * / `default_char_tiers()` 保持一致（词频表 100/1000/5000/20000/50000/150000，
  * 字表 50/200/600/1500/3000/5000）。
  */
 const MOCK_WORD_BOUNDS = [100, 1_000, 5_000, 20_000, 50_000, 150_000];
@@ -1020,7 +1022,7 @@ function mockTiers(kind: 'word' | 'char' = 'word'): { name: string; max_rank: nu
 /**
  * 演示数据的覆盖率口径。
  *
- * 真实语料里默认阈值下的七组覆盖率是「头重脚轻」的一条递减序列（词表实测约
+ * 真实语料里默认阈值下的七组覆盖率是「头重脚轻」的一条递减序列（词频表实测约
  * 45% / 15% / 13% / 8% / 5% / 3% / 1%）。演示数据只有 57 条词，按 token 数硬摊
  * 会让最后一组吃掉 38%（所有低频词都挤在「极少」），「按覆盖率分组」的默认起点
  * 就没意义了。所以这里按几何衰减 `0.5 × 0.8^i` 造一条递减曲线 —— 归一化后是
@@ -1052,7 +1054,7 @@ function mockTierStats(entries: MockEntry[], kind: 'word' | 'char'): TierStat[] 
   return stats;
 }
 
-/** 给分域造一份「顺序不同、部分缺档」的排名，模拟真实语料的分域差异 */
+/** 给表组造一份「顺序不同、部分缺档」的排名，模拟真实语料的表组差异 */
 function domainEntries(base: MockEntry[], domain: string, kind: 'word' | 'char'): MockEntry[] {
   const seed = domain.length * 31 + (kind === 'word' ? 7 : 13) + base.length;
   const rotated = base.map((_, i) => base[(i * 7 + seed) % base.length]);
@@ -1063,7 +1065,7 @@ function domainEntries(base: MockEntry[], domain: string, kind: 'word' | 'char')
     seen.add(entry.word);
     unique.push(entry);
   }
-  // 让每个域都缺掉几个词，制造「该域未收录」的展示效果
+  // 让每个表组都缺掉几个词，制造「该表组未收录」的展示效果
   const drop = domain === 'book' ? 3 : domain === 'forum' ? 5 : domain === 'wiki' ? 7 : 0;
   const kept = unique.slice(drop);
   return kept.map((entry, i) => ({ ...entry, rank: i + 1 }));
@@ -1077,7 +1079,7 @@ function mockTableMeta(
 ): TableMeta {
   const totalTokens = entries.reduce((sum, e) => sum + e.count, 0);
   return {
-    // `path` 是**作用域名**（schema v3 起），不再是 `full/word` 那种路径
+    // `path` 是**表组名**（schema v3 起），不再是 `full/word` 那种路径
     path: scope,
     kind,
     entries: entries.length,
@@ -1102,8 +1104,8 @@ function buildMockMeta(corpusRoot: string): Meta {
       engine: 'jieba-rs',
       version: '0.7.4',
       hmm: true,
-      // v2：词库链，dicts[0] 是主词库
-      dicts: [mockDictRef('jieba 主词库', MOCK_MAIN_DICT_ENTRIES, 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90')],
+      // v2：词典链，dicts[0] 是主词典
+      dicts: [mockDictRef('jieba 主词典', MOCK_MAIN_DICT_ENTRIES, 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90')],
       min_len: 1,
       max_len: 20,
       keep_latin: true,
@@ -1129,7 +1131,7 @@ function buildMockMeta(corpusRoot: string): Meta {
       ...MOCK_DOMAIN_NAMES.flatMap((name) => {
         const words = domainEntries(MOCK_WORDS, name, 'word');
         const chars = domainEntries(MOCK_CHARS, name, 'char');
-        // 铺平之后每个作用域就是一个平级的目录名（不再有 domains/ 这一层）
+        // 铺平之后每个表组就是一个平级的目录名（不再有 domains/ 这一层）
         return [
           mockTableMeta(name, 'word', words, mockTierStats(words, 'word')),
           mockTableMeta(name, 'char', chars, mockTierStats(chars, 'char')),
@@ -1145,20 +1147,20 @@ function buildMockMeta(corpusRoot: string): Meta {
 const MOCK_DIR = '(浏览器预览) 演示数据集';
 
 // ===========================================================================
-// 数据文件夹（词库库 / 词表库）的演示数据
+// 数据文件夹（词典库 / 词频表库）的演示数据
 //
 // 目标：让浏览器预览里**所有状态都看得到**，而不是只走顺利路径：
-//   - 词库：一份正常的、一份 `error` 非空的坏文件、一份 `freq_zero > 0` 的隐患文件；
-//   - 词表：`binding.kind` 分别是 ok / legacy / drifted / missing，外加一张
+//   - 词典：一份正常的、一份 `error` 非空的坏文件、一份 `freq_zero > 0` 的隐患文件；
+//   - 词频表：`binding.kind` 分别是 ok / legacy / drifted / missing，外加一张
 //     `in_library: false` 的外部表（那种表界面不给删除按钮）。
 //
-// 这些数据是**可变的**：导入 / 删除词库、激活 / 删除词表都要能在浏览器里点出来。
+// 这些数据是**可变的**：导入 / 删除词典、激活 / 删除词频表都要能在浏览器里点出来。
 // ===========================================================================
 
 /** 演示用的数据文件夹（和 Rust 侧默认位置同构：里面是 dicts\ 与 tables\） */
 const MOCK_LIB_ROOT = 'C:\\Users\\demo\\AppData\\Local\\com.voctier.desktop\\data';
 
-/** 主词库的有效词条数：给 mock meta 的 `dicts[]` 与 `report.entries` 共用 */
+/** 主词典的有效词条数：给 mock meta 的 `dicts[]` 与 `report.entries` 共用 */
 const MOCK_MAIN_DICT_ENTRIES = 349_046;
 
 /** 造一条 `DictRef`；`file_name` + `root` 拼出 `path`，`sha256` 给固定值 */
@@ -1178,10 +1180,10 @@ function mockDictRef(
   };
 }
 
-/** 演示用词库清单（`file_name` 就是 `dicts\` 下的文件名，也是 `dictFiles` 的取值） */
+/** 演示用词典清单（`file_name` 就是 `dicts\` 下的文件名，也是 `dictFiles` 的取值） */
 let mockDicts: DictItem[] = [
   {
-    dict: mockDictRef('jieba 主词库', MOCK_MAIN_DICT_ENTRIES, 'a1b2'.repeat(16), 'jieba 主词库.dict'),
+    dict: mockDictRef('jieba 主词典', MOCK_MAIN_DICT_ENTRIES, 'a1b2'.repeat(16), 'jieba 主词典.dict'),
     error: null,
     report: {
       entries: MOCK_MAIN_DICT_ENTRIES,
@@ -1190,7 +1192,7 @@ let mockDicts: DictItem[] = [
       freq_omitted: 0,
       freq_zero: 0,
     },
-    file_name: 'jieba 主词库.dict',
+    file_name: 'jieba 主词典.dict',
     origin: 'seeded',
   },
   {
@@ -1217,14 +1219,14 @@ let mockDicts: DictItem[] = [
   },
 ];
 
-/** 演示用词表清单；`path` 是绝对路径，外部表落在数据文件夹之外 */
+/** 演示用词频表清单；`path` 是绝对路径，外部表落在数据文件夹之外 */
 const MOCK_TABLES_DIR = `${MOCK_LIB_ROOT}\\tables`;
 /** 数据文件夹之外那张演示表（`in_library: false`） */
 export const MOCK_EXTERNAL_TABLE_DIR = 'E:\\corpora\\voctier-out\\2024 汇总';
 
 let mockActiveTable: string | null = '演示全库表';
 
-/** 造一份词表列表项：`meta` 用 `buildMockMeta` 那份假产物 */
+/** 造一份词频表列表项：`meta` 用 `buildMockMeta` 那份假产物 */
 function mockTableItem(
   name: string,
   opts: {
@@ -1254,7 +1256,7 @@ function mockTableItem(
   };
 }
 
-/** 演示词表：覆盖 ok / legacy / drifted / missing 四种绑定 + 一张外部表 */
+/** 演示词频表：覆盖 ok / legacy / drifted / missing 四种绑定 + 一张外部表 */
 function buildMockTableList(): TableItem[] {
   return [
     mockTableItem('演示全库表', {
@@ -1276,7 +1278,7 @@ function buildMockTableList(): TableItem[] {
     mockTableItem('论坛语料', {
       corpusRoot: 'D:\\corpus\\forum',
       generatedAt: '2024-04-02T07:12:00Z',
-      binding: { kind: 'missing', missing: ['旧版主词库'] },
+      binding: { kind: 'missing', missing: ['旧版主词典'] },
       origin: 'imported',
     }),
     mockTableItem('外部汇总表', {
@@ -1348,7 +1350,7 @@ const MOCK_SEGMENT_WORDS = [
   '计算',
   '自然',
   '处理',
-  ...'我们国家还可以语言统计数据文本词汇频率语料库分词覆盖率阈值排名字表词表未收录'.split(''),
+  ...'我们国家还可以语言统计数据文本词汇频率语料库分词覆盖率阈值排名字表词频表未收录'.split(''),
   ...MOCK_WORDS.filter((w) => w.word.length > 1).map((w) => w.word),
 ];
 
@@ -1474,6 +1476,7 @@ const MOCK = {
       popupOpacity: 0.96,
       popupAlwaysOnTop: true,
       popupAutoCloseMs: 0,
+      closeToTray: true,
       theme: 'system',
       locale: 'zh-CN',
       threads: 0,
@@ -1481,7 +1484,7 @@ const MOCK = {
       keepDigit: true,
       keepLatin: true,
       skipSingleChar: false,
-      scanDicts: ['jieba 主词库.dict', '领域补充词.dict'],
+      scanDicts: ['jieba 主词典.dict', '领域补充词.dict'],
       activeTable: '演示全库表',
       activeTablePath: null,
       minCount: 1,
@@ -1537,7 +1540,7 @@ const MOCK = {
       active_binding: active?.binding ?? null,
       active_warnings:
         active && active.binding.kind === 'legacy'
-          ? ['这是 v1 老产物：没有词库指纹，词库一致性无从校验。']
+          ? ['这是 v1 老产物：没有词典指纹，词典一致性无从校验。']
           : [],
     };
   },
@@ -1567,7 +1570,7 @@ const MOCK = {
       name = `${stem} (${n}).dict`;
       n += 1;
     }
-    // 导入的演示词库一律是"正常"的，带一点点隐患让列表有内容可看
+    // 导入的演示词典一律是"正常"的，带一点点隐患让列表有内容可看
     mockDicts = [
       ...mockDicts,
       {
@@ -1663,7 +1666,7 @@ const MOCK = {
       meta.tables[0];
     const kind: 'word' | 'char' = table.kind === 'char' ? 'char' : 'word';
     const base = kind === 'char' ? MOCK_CHARS : MOCK_WORDS;
-    // 非 full 的作用域 = 分域演示数据（铺平之后作用域名就是子目录名）
+    // 非 full 的表组 = 表组演示数据（铺平之后表组名就是子目录名）
     const domain = table.path === FULL_SCOPE ? null : table.path;
     const entries = domain ? domainEntries(base, domain, kind) : base;
 
@@ -1720,7 +1723,7 @@ const MOCK = {
 
   /**
    * 演示「相加」：不写任何文件，只往当前演示产物的 `tables` 里追加一条记录，
-   * 让界面上的新作用域、可设为主表、来源标记这些都能点出来。
+   * 让界面上的新表组、可设为主表、来源标记这些都能点出来。
    */
   composeTables(params: ComposeParams): ComposedTable[] {
     const meta = MOCK.activeDataset();
@@ -1766,7 +1769,7 @@ const MOCK = {
     return () => mockErrorHandlers.delete(handler);
   },
 
-  /** 模拟一次完整扫描：日志 → 探测 → 分域进度 → 各表结果 → 完成 */
+  /** 模拟一次完整扫描：日志 → 探测 → 表组进度 → 各表结果 → 完成 */
   startScan(params: ScanParams) {
     MOCK.cancelScan();
     const plan = MOCK.planCorpus(params.corpus || MOCK_DIR);

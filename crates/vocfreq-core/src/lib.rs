@@ -29,7 +29,7 @@ pub enum Error {
     Schema(String),
     /// 产物格式错误或版本不匹配
     Format(String),
-    /// 词库文件读不了、格式不对，或找不到该用的词库
+    /// 词典文件读不了、格式不对，或找不到该用的词典
     Dict(String),
     Other(String),
 }
@@ -41,7 +41,7 @@ impl fmt::Display for Error {
             Error::Json(e) => write!(f, "JSON 错误: {e}"),
             Error::Schema(m) => write!(f, "语料库格式错误: {m}"),
             Error::Format(m) => write!(f, "产物格式错误: {m}"),
-            Error::Dict(m) => write!(f, "词库错误: {m}"),
+            Error::Dict(m) => write!(f, "词典错误: {m}"),
             Error::Other(m) => write!(f, "{m}"),
         }
     }

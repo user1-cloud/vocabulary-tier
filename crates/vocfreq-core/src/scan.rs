@@ -1,12 +1,12 @@
-//! 语料库扫描编排：分域、分块、并行、计数、落盘。
+//! 语料库扫描编排：表组、分块、并行、计数、落盘。
 //!
 //! 并行策略（依据 `docs/DESIGN.md` §0 的实测）：
 //! * 把每个文件切成约 64MB 的**字节区间**，所有区间构成工作队列交给 `par_iter`；
-//!   这样即使某个域只有一个 1GB 大文件也能吃满 32 线程；
+//!   这样即使某个表组只有一个 1GB 大文件也能吃满 32 线程；
 //! * 用 `fold` + `reduce` 而非 `collect`，避免几百个中间计数表同时驻留内存；
 //! * 计数表**每线程独占**，绝不用互斥锁分片表（实测 32 线程会倒退）。
 //!
-//! 域之间串行、域内并行：每个域的计数表用完即可释放，整体内存受限，且语料只读一遍。
+//! 表组之间串行、表组内并行：每个表组的计数表用完即可释放，整体内存受限，且语料只读一遍。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +47,7 @@ pub struct ScanConfig {
     /// 0 表示按可用核心数自动
     pub threads: usize,
     pub tok: TokenizeOpts,
-    /// 词库链，**按装载顺序**：第一份是主词库，其后都是叠加词库；同名条目后者覆盖
+    /// 词典链，**按装载顺序**：第一份是主词典，其后都是叠加词典；同名条目后者覆盖
     /// 前者的词频。
     ///
     /// 现在没有"内置词典"这回事了，所以这里不能为空 —— [`scan`] 会直接报错，
@@ -55,21 +55,21 @@ pub struct ScanConfig {
     pub dicts: Vec<PathBuf>,
     /// 自定义规则；`None` 表示用内置规则做自动探测
     pub rules: Option<Vec<SourceRule>>,
-    /// 只处理这些域；空表示全部
+    /// 只处理这些表组；空表示全部
     pub only_domains: Vec<String>,
-    /// 是否跳过各分域的子表（只要全库总表）
+    /// 是否跳过各表组的子表（只要全库总表）
     pub skip_domain_tables: bool,
-    /// 是否**同时**产出全量作用域 `full`。
+    /// 是否**同时**产出全量表组 `full`。
     ///
-    /// **默认 `false`**：`scan` 只产各作用域自己的表，`full` 一律由
-    /// 「跨产物合流 [`crate::merge`] + 各作用域 [`crate::compose`] 相加」得到。
+    /// **默认 `false`**：`scan` 只产各表组自己的表，`full` 一律由
+    /// 「跨产物合流 [`crate::merge`] + 各表组 [`crate::compose`] 相加」得到。
     ///
     /// 为什么改成默认不产：全量语料（实测 140 GB）常常大到一块盘放不下，只能
-    /// 一个域一个域地扫成**多份**产物 —— 那种工作流里每次 `scan` 都顺手写一遍
+    /// 一个表组一个表组地扫成**多份**产物 —— 那种工作流里每次 `scan` 都顺手写一遍
     /// `full` 是纯浪费（写几百 MB，而且因为每次都整体覆盖，前几次写的全被冲掉）。
     ///
     /// 置 `true` 只为一种用途：**验证**。一次性全量扫一遍、把 `full` 当对照基准，
-    /// 与"分域扫 + 合流 + 相加"的结果逐条比对（见 `scan.rs` 与 `compose.rs` 的测试）。
+    /// 与"表组扫 + 合流 + 相加"的结果逐条比对（见 `scan.rs` 与 `compose.rs` 的测试）。
     /// 所以它是内部能力，不对外设开关。
     pub write_full: bool,
     /// 只保留出现次数 >= 该值的词条（1 表示不过滤）
@@ -175,7 +175,7 @@ struct Chunk {
     end: u64,
 }
 
-/// 扫描语料库目录，为每个文件确定域与解析规则。
+/// 扫描语料库目录，为每个文件确定表组与解析规则。
 ///
 /// 只读每个文件的**首行**做探测，因此即使语料是 33GB 也很快。
 /// 返回 `(计划, 警告)`；警告由调用方通过 [`Progress::Log`] 上报。
@@ -449,7 +449,7 @@ fn scan_chunk(
     }
 }
 
-/// 扫描一个域：域内所有区间并行，计数表每线程独占，最后 fold/reduce 归并。
+/// 扫描一个表组：表组内所有区间并行，计数表每线程独占，最后 fold/reduce 归并。
 fn run_domain(
     tk: &Tokenizer,
     rules: &[SourceRule],
@@ -506,10 +506,10 @@ struct Written {
     ch: TableMeta,
 }
 
-/// 把一套（词表 + 字表）写进 `<out_dir>`，返回它们在 `meta.json` 里的描述。
+/// 把一套（词频表 + 字表）写进 `<out_dir>`，返回它们在 `meta.json` 里的描述。
 ///
-/// `scope` 是**作用域 id**，同时是磁盘上的目录名（`<out>/<scope>/`）。每个作用域
-/// 平级、结构相同 —— 全库的 `full` 与分域的 `news` 没有任何区别，这是 schema v3
+/// `scope` 是**表组 id**，同时是磁盘上的目录名（`<out>/<scope>/`）。每个表组
+/// 平级、结构相同 —— 全库的 `full` 与表组的 `news` 没有任何区别，这是 schema v3
 /// 的核心改动（见 `docs/DESIGN.md` §5.0）。
 #[allow(clippy::too_many_arguments)]
 fn write_tables(
@@ -525,7 +525,7 @@ fn write_tables(
     std::fs::create_dir_all(out_dir)?;
 
     // 阈值按**该表自己的条目数**由前%换算，而不是套一份全局常量：
-    // 分域表只有几万条，前 0.0026% 是 1 条；全库表几百万条，同一个前%是 98 条。
+    // 表组只有几万条，前 0.0026% 是 1 条；全库表几百万条，同一个前%是 98 条。
     let word_pct = rank::default_tier_pct_for("word");
     let char_pct = rank::default_tier_pct_for("char");
     let word_tiers = rank::tiers_from_pct(word_pct, word_entries.len() as u64);
@@ -629,11 +629,11 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         None
     };
     std::fs::create_dir_all(&cfg.out)?;
-    // 「不要分域表 + 不要 full」会得到一张表都没有的目录，而 `Dataset::open` 打不开
+    // 「不要表组 + 不要 full」会得到一张表都没有的目录，而 `Dataset::open` 打不开
     // 这种产物（"tables 为空，这个目录是废的"）。前置拦掉，别让用户跑完几十分钟才发现。
     if cfg.skip_domain_tables && !cfg.write_full {
         return Err(Error::Other(
-            "配置矛盾：既跳过了各分域的表，又没有要全量作用域 `full`，这样产物里一张表都不会有。\
+            "配置矛盾：既跳过了各表组的表，又没有要全量表组 `full`，这样产物里一张表都不会有。\
              `full` 现在默认不产出（它由「merge 合流 + compose 相加」得到），\
              想要它请显式打开 `write_full`（CLI：`--full`）。"
                 .into(),
@@ -646,13 +646,13 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         })
     };
 
-    // 1) 分词器：整条词库链一次装载
+    // 1) 分词器：整条词典链一次装载
     let tk = Tokenizer::from_dicts(&cfg.dicts, cfg.tok.clone())?;
     for (d, rep) in tk.dicts.iter().zip(tk.dict_reports.iter()) {
         log(
             "info",
             format!(
-                "词库 {}：{} 条有效词条（跳过注释 {} 行、空行 {} 行）",
+                "词典 {}：{} 条有效词条（跳过注释 {} 行、空行 {} 行）",
                 d.short(),
                 rep.entries,
                 rep.comments,
@@ -715,7 +715,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
     log(
         "info",
         format!(
-            "发现 {} 个文件 / {:.2} GB，{} 个作用域：{}",
+            "发现 {} 个文件 / {:.2} GB，{} 个表组：{}",
             plans.len(),
             total_bytes as f64 / 1e9,
             scope_metas.len(),
@@ -736,13 +736,13 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         ),
     );
 
-    // 3) 逐作用域扫描 + 落盘
+    // 3) 逐表组扫描 + 落盘
     let mut overall = GlobalCounts::new();
     let mut overall_totals = Totals::default();
     let mut table_metas: Vec<TableMeta> = Vec::new();
-    // 默认不产 `full`，词典外候选词就得从**某个分域表**里筛。这里留着迄今条目最多的
-    // 那一份（它是全库最有代表性的子集：候选词本来就是"值得回填词库的高频新词"，
-    // 按一个足够大的域筛比按几千条的域筛更有意义）。
+    // 默认不产 `full`，词典外候选词就得从**某个表组**里筛。这里留着迄今条目最多的
+    // 那一份（它是全库最有代表性的子集：候选词本来就是"值得回填词典的高频新词"，
+    // 按一个足够大的表组筛比按几千条的表组筛更有意义）。
     let mut oov_source: Option<Vec<RankedEntry>> = None;
 
     for d in &scope_metas {
@@ -769,8 +769,8 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         let uniq_words = counts.words.len();
         let uniq_chars = counts.char_entries().len();
 
-        // 先把本域并入全库总表（此时 counts 还能被借用），再排行落盘（会消费 counts）。
-        // 顺序不能反：rank_entries_owned 会把词表搬空。
+        // 先把本表组并入全库总表（此时 counts 还能被借用），再排行落盘（会消费 counts）。
+        // 顺序不能反：rank_entries_owned 会把词频表搬空。
         let t_merge = Instant::now();
         overall.merge(&counts);
         overall_totals.add(&tot);
@@ -789,7 +789,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
             rank_ms = t_rank.elapsed().as_millis();
 
             let t_write = Instant::now();
-            // 作用域就是目录名：`<out>/news/`，与 `<out>/full/` 完全平级
+            // 表组就是目录名：`<out>/news/`，与 `<out>/full/` 完全平级
             let w = write_tables(
                 &cfg.out.join(&d.name),
                 &d.name,
@@ -819,7 +819,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         log(
             "info",
             format!(
-                "作用域 {}: {:.2} GB / {} token / {} 词 / {} 字 | 扫描 {:.1}s 排行 {:.1}s 落盘 {:.1}s 归并 {:.1}s",
+                "表组 {}: {:.2} GB / {} token / {} 词 / {} 字 | 扫描 {:.1}s 排行 {:.1}s 落盘 {:.1}s 归并 {:.1}s",
                 d.name,
                 tot.bytes as f64 / 1e9,
                 tot.tokens,
@@ -835,10 +835,10 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         );
     }
 
-    // 4) 全量作用域（默认**不产**，见 [`ScanConfig::write_full`]）。
+    // 4) 全量表组（默认**不产**，见 [`ScanConfig::write_full`]）。
     //
-    //    它现在只是一个**验证基准**：一次性全量扫一遍、和各分域相加的结果逐条比对。
-    //    常规工作流是「分域扫成几份产物 → merge 合流 → compose 相加出 full」，
+    //    它现在只是一个**验证基准**：一次性全量扫一遍、和各表组相加的结果逐条比对。
+    //    常规工作流是「表组扫成几份产物 → merge 合流 → compose 相加出 full」，
     //    在那种工作流里每次 scan 都写一遍 full 纯是浪费（而且因为整体覆盖，
     //    前几次写的会被后一次冲掉）。
     let oov_entries: Vec<RankedEntry> = if cfg.write_full {
@@ -867,7 +867,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
         log(
             "info",
             format!(
-                "全量作用域（full）：{} 词 / {} 字 | 排行 {:.1}s 落盘 {:.1}s",
+                "全量表组（full）：{} 词 / {} 字 | 排行 {:.1}s 落盘 {:.1}s",
                 full_words.len(),
                 full_char_entries.len(),
                 full_rank_ms as f64 / 1000.0,
@@ -887,7 +887,7 @@ pub fn scan(cfg: &ScanConfig, progress: ProgressFn<'_>) -> Result<Meta> {
     } else {
         log(
             "info",
-            "按默认口径跳过全量作用域 full：它由「合流各分域产物 + 把作用域相加」得到\
+            "按默认口径跳过全量表组 full：它由「合流各表组产物 + 把表组相加」得到\
              （`vocfreq merge` 然后 `vocfreq compose --scope full`）"
                 .to_string(),
         );
@@ -1031,7 +1031,7 @@ mod tests {
 
     #[test]
     fn rejects_skip_domain_tables_without_full() {
-        // 「不要分域表 + 不要 full」= 一张表都没有。必须在动手扫描前就报错，
+        // 「不要表组 + 不要 full」= 一张表都没有。必须在动手扫描前就报错，
         // 而不是产出一份 `Dataset::open` 打不开的废目录。
         let out = std::env::temp_dir().join(format!("vocfreq_scan_reject_{}", std::process::id()));
         let mut cfg = ScanConfig::new("corpus-不存在也无所谓", &out);

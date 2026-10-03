@@ -1,9 +1,9 @@
 /**
- * 分组设置 / 主作用域的共享状态（Svelte 5 runes，模块级 `.svelte.ts` 是官方推荐的写法）。
+ * 分组设置 / 主表组的共享状态（Svelte 5 runes，模块级 `.svelte.ts` 是官方推荐的写法）。
  *
  * 为什么要有这个模块：
  *   - 分组自定义（tierMethod / tierPct / tierWordBounds / tierCharBounds / tierCoverage）
- *     与**主作用域**（primaryScope）都在设置里，但渲染分组的地方有三个页面 + 两个组件
+ *     与**主表组**（primaryScope）都在设置里，但渲染分组的地方有三个页面 + 两个组件
  *     （划句分析、排行榜、悬浮小窗、TokenChips、TokenDetail、TierLegend）。
  *     每个页面各拉一次 `get_settings` 会持有各自的一份副本，改完一处别处不刷新。
  *   - 所以设置只在这里存一份：App.svelte 启动时 `loadTierSettings()` 一次，
@@ -25,7 +25,7 @@ import {
   type TierMethod,
 } from './types';
 
-/** 全局设置（只关心里面与分组 / 主作用域有关的那几个字段） */
+/** 全局设置（只关心里面与分组 / 主表组有关的那几个字段） */
 export const appSettings = $state<{ value: Settings }>({ value: defaultSettings() });
 
 /** 设置是否已经从后端加载过一次 */
@@ -49,9 +49,9 @@ export function tierMethod(): TierMethod {
 }
 
 /**
- * **主作用域名**（不是 `作用域/类型`）。
+ * **主表组名**（不是 `表组/类型`）。
  *
- * 设置里没填就从产物里挑：`full` 优先，其次第一张有词表的作用域。
+ * 设置里没填就从产物里挑：`full` 优先，其次第一张有词频表的表组。
  * 划句分析、排行榜、分组预览都必须以它为准 —— 否则同一句话在两个页面会是两种颜色。
  */
 export function primaryScope(meta: Meta | null | undefined): string {
@@ -63,9 +63,9 @@ export function primaryScope(meta: Meta | null | undefined): string {
 }
 
 /**
- * 主作用域里某一类的**表身份**（`作用域/类型`），用于取阈值、曲线与查表。
+ * 主表组里某一类的**表身份**（`表组/类型`），用于取阈值、曲线与查表。
  *
- * 主作用域缺这一类时（相加只加了词表就会出现）回落到该类的第一张表 —— 宁可换个
+ * 主表组缺这一类时（相加只加了词频表就会出现）回落到该类的第一张表 —— 宁可换个
  * 来源也不能让整句变成「未收录」。
  */
 export function primaryTableKey(meta: Meta | null | undefined, kind: 'word' | 'char'): string {

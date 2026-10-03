@@ -22,29 +22,29 @@ use crate::{Error, Result, Totals, VERSION};
 /// `meta.json` 的格式版本。
 ///
 /// * **1**：`tokenizer.dict` 是一句自由文本标签，`user_dict` 是单个路径字符串。
-///   没有指纹，所以「这张表基于哪份词库生成的」**无法校验** —— 词库当年是编在
+///   没有指纹，所以「这张表基于哪份词典生成的」**无法校验** —— 词典当年是编在
 ///   exe 里的，没有替换的可能，也就没记的必要。
-/// * **2**：词库外置，`tokenizer.dicts` 是完整词库链（每份都带 `sha256`），
-///   读取方据此判断词库有没有被换过。表用 `full/word`、`domains/<域>/word`
-///   这套「路径」指代，全库表与分域表是两个不同的概念。
-/// * **3**：**作用域（scope）铺平**。不再区分「全库表」与「分域表」——每个作用域
-///   就是一张词表加一张字表，`full` 只是其中一个作用域。`TableMeta.path` 的语义
-///   从「路径」变成**作用域 id**（`full`、`news`、`相加：财经`），表身份统一用
-///   `作用域/类型` 表示。相加产生的新表是同级的另一个作用域，靠
+/// * **2**：词典外置，`tokenizer.dicts` 是完整词典链（每份都带 `sha256`），
+///   读取方据此判断词典有没有被换过。表用 `full/word`、`domains/<表组>/word`
+///   这套「路径」指代，全库表与表组是两个不同的概念。
+/// * **3**：**表组（scope）铺平**。不再区分「全库表」与「表组」——每个表组
+///   就是一张词频表加一张字表，`full` 只是其中一个表组。`TableMeta.path` 的语义
+///   从「路径」变成**表组 id**（`full`、`news`、`相加：财经`），表身份统一用
+///   `表组/类型` 表示。相加产生的新表是同级的另一个表组，靠
 ///   [`TableMeta::source_tables`] 记来源。
 ///
 /// 读取方遇到 **< 3** 的产物必须**明确报错并让用户重扫**，不能静默按新布局去找文件
 /// —— 那只会得到一句莫名其妙的「文件不存在」。
 pub const SCHEMA_VERSION: u32 = 3;
 
-/// 全量语料对应的作用域 id。
+/// 全量语料对应的表组 id。
 ///
-/// 它**不是特权作用域**：与 `news`、`wiki` 完全同级，只是"所有域加一起"这一份。
+/// 它**不是特权表组**：与 `news`、`wiki` 完全同级，只是"所有表组加一起"这一份。
 pub const SCOPE_FULL: &str = "full";
 
-/// 作用域 id 里不允许出现的字符（目录名）。
+/// 表组 id 里不允许出现的字符（目录名）。
 ///
-/// 相加出来的作用域名是用户起的，会直接变成磁盘目录名，必须洗一遍。
+/// 相加出来的表组名是用户起的，会直接变成磁盘目录名，必须洗一遍。
 /// 与桌面端的 `library::sanitize_table_name` 同源，但这里更严（连 `..` 都不允许）。
 pub fn sanitize_scope(raw: &str) -> String {
     let mut s: String = raw
@@ -379,20 +379,20 @@ pub struct TokenizerMeta {
     pub engine: String,
     pub version: String,
     pub hmm: bool,
-    /// 词库链，**按装载顺序**：`dicts[0]` 是主词库，其后都是叠加词库。
+    /// 词典链，**按装载顺序**：`dicts[0]` 是主词典，其后都是叠加词典。
     ///
-    /// 每份都带 `sha256`，所以读取方能回答「这张表是不是还配得上当前这份词库」。
+    /// 每份都带 `sha256`，所以读取方能回答「这张表是不是还配得上当前这份词典」。
     #[serde(default)]
     pub dicts: Vec<DictRef>,
-    /// **v1 兼容**：老产物把主词库记成一句自由文本标签（`"dict": "builtin(...)"`）。
+    /// **v1 兼容**：老产物把主词典记成一句自由文本标签（`"dict": "builtin(...)"`）。
     ///
-    /// 只在读老产物时才有值，写新产物时永不写出（词库链已经在 `dicts` 里了）。
+    /// 只在读老产物时才有值，写新产物时永不写出（词典链已经在 `dicts` 里了）。
     /// 注意 `DictRef` 的反序列化接受纯字符串，因此这里能直接接住 v1 的写法。
     #[serde(default, rename = "dict", skip_serializing_if = "Option::is_none")]
     pub legacy_dict: Option<DictRef>,
-    /// **v1 兼容**：老产物把（唯一的）叠加词库记成单个路径字符串。
+    /// **v1 兼容**：老产物把（唯一的）叠加词典记成单个路径字符串。
     ///
-    /// 同样只读不写。读取方不能因为 `dicts` 为空就断定"这份产物没有词库" ——
+    /// 同样只读不写。读取方不能因为 `dicts` 为空就断定"这份产物没有词典" ——
     /// 老产物可能整个信息都在 `legacy_dict` / `legacy_user_dict` 里（约定同
     /// [`Meta::tier_keys`]：空数组 = 无从判断，不要据此报错）。
     #[serde(default, rename = "user_dict", skip_serializing_if = "Option::is_none")]
@@ -405,7 +405,7 @@ pub struct TokenizerMeta {
 }
 
 impl TokenizerMeta {
-    /// 实际生效的词库链。
+    /// 实际生效的词典链。
     ///
     /// 优先用 v2 的 [`Self::dicts`]；只有它为空（老产物）时才回退到 v1 的两个字段。
     pub fn resolved_dicts(&self) -> Vec<DictRef> {
@@ -422,12 +422,12 @@ impl TokenizerMeta {
         out
     }
 
-    /// 是不是 v1 老格式 —— 也就是「没有指纹、词库一致性无从校验」。
+    /// 是不是 v1 老格式 —— 也就是「没有指纹、词典一致性无从校验」。
     pub fn is_legacy(&self) -> bool {
         self.dicts.is_empty()
     }
 
-    /// 词库链里有没有**可校验**的成员。
+    /// 词典链里有没有**可校验**的成员。
     pub fn has_verifiable_dict(&self) -> bool {
         self.resolved_dicts().iter().any(DictRef::is_verifiable)
     }
@@ -442,10 +442,10 @@ pub struct SourceScope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableMeta {
-    /// **作用域 id**，同时是 `<产物目录>/<path>/` 这个子目录名，例如 `full`、`news`。
+    /// **表组 id**，同时是 `<产物目录>/<path>/` 这个子目录名，例如 `full`、`news`。
     ///
     /// ⚠ 语义在 schema v3 变过一次：从前它是 `full/word`、`domains/news/char`
-    /// 这种「路径」，把作用域与类型糊在一个字符串里。现在它只是作用域，
+    /// 这种「路径」，把表组与类型糊在一个字符串里。现在它只是表组，
     /// 类型在 [`Self::kind`] 里；两者合起来才是表身份（见 [`table_key`]）。
     pub path: String,
     pub kind: String,
@@ -472,7 +472,7 @@ pub struct TableMeta {
     pub tier_pct: Vec<f64>,
     /// 这张表是把哪些表**相加**出来的；空数组 = 这是扫描出来的原始表。
     ///
-    /// 存的是 `作用域/类型` 形式（与用户的「相加」选择一一对应），用于界面显示
+    /// 存的是 `表组/类型` 形式（与用户的「相加」选择一一对应），用于界面显示
     /// 来源，也是将来做「零拷贝虚拟合成」的接口。
     #[serde(default)]
     pub source_tables: Vec<String>,
@@ -483,7 +483,7 @@ fn default_min_count() -> u64 {
 }
 
 impl TableMeta {
-    /// 这张表的身份：`作用域/类型`，例如 `full/word`、`相加：财经/char`。
+    /// 这张表的身份：`表组/类型`，例如 `full/word`、`相加：财经/char`。
     pub fn key(&self) -> String {
         table_key(&self.path, &self.kind)
     }
@@ -498,16 +498,16 @@ impl TableMeta {
     }
 }
 
-/// 表身份字符串：`作用域/类型`。
+/// 表身份字符串：`表组/类型`。
 ///
 /// 全仓库**只有这一处**拼这个字符串（Rust 侧）；前端的等价实现是
 /// `apps/desktop/src/lib/format.ts::tableKey`。设置里的 `primaryScope` 与之无关
-/// （那存的是纯作用域），老设置里的 `enabledTables` 存的是这个形式，因此仍然能对上。
+/// （那存的是纯表组），老设置里的 `enabledTables` 存的是这个形式，因此仍然能对上。
 pub fn table_key(scope: &str, kind: &str) -> String {
     format!("{scope}/{kind}")
 }
 
-/// 拆开表身份字符串。作用域本身可能含 `/`（相加表的上一级名字 + 子名），
+/// 拆开表身份字符串。表组本身可能含 `/`（相加表的上一级名字 + 子名），
 /// 所以**从右边**切最后一个 `/`。
 pub fn split_table_key(key: &str) -> (String, String) {
     match key.rsplit_once('/') {
@@ -525,13 +525,13 @@ pub struct Meta {
     pub elapsed_ms: u64,
     pub tokenizer: TokenizerMeta,
     pub totals: Totals,
-    /// 建这张表时语料库里**实际扫到的作用域**（含文件数、字节数）。
+    /// 建这张表时语料库里**实际扫到的表组**（含文件数、字节数）。
     ///
     /// ⚠ 这是「**语料切片**的清单」，不是「表清单」—— 表清单看 [`Self::tables`]。
-    /// 两者以前是同一件事（扫描按一级子目录分域、每域产出一张表），现在不是了：
+    /// 两者以前是同一件事（扫描按一级子目录表组、每表组产出一张表），现在不是了：
     ///
     /// * 「生成词频表」页的扫描计划显示的是**语料切片**（磁盘上的一级子目录）；
-    /// * 「划句分析」「排行榜」「表管理」的作用域则是**表**（`meta.scopes()`）。
+    /// * 「划句分析」「排行榜」「表管理」的表组则是**表**（`meta.scopes()`）。
     ///
     /// 相加产生的表里这个字段可能为空（相加不再读语料）。
     #[serde(default)]
@@ -553,7 +553,7 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// 按「作用域 + 类型」找一张表。**这是全仓库唯一的查表入口** ——
+    /// 按「表组 + 类型」找一张表。**这是全仓库唯一的查表入口** ——
     /// schema v3 之前到处写 `tables.iter().find(|t| t.path == "full/word")`，
     /// 布局一改就全散架了。
     pub fn table(&self, scope: &str, kind: &str) -> Option<&TableMeta> {
@@ -562,13 +562,13 @@ impl Meta {
             .find(|t| t.path == scope && t.kind == kind)
     }
 
-    /// 按表身份（`作用域/类型`）找一张表。
+    /// 按表身份（`表组/类型`）找一张表。
     pub fn table_by_key(&self, key: &str) -> Option<&TableMeta> {
         let (scope, kind) = split_table_key(key);
         self.table(&scope, &kind)
     }
 
-    /// 全部作用域 id，按「`full` 优先，其余按名字」排序。
+    /// 全部表组 id，按「`full` 优先，其余按名字」排序。
     ///
     /// 顺序确定很重要：界面列表、回落链、对比列都按它排，否则同一份产物在不同
     /// 机器上（目录枚举顺序不同）会长得不一样。
@@ -720,9 +720,9 @@ mod tests {
         assert_eq!(meta.table("news", "word").map(|t| t.entries), Some(1));
         assert!(
             meta.table("news", "char").is_none(),
-            "作用域对、类型不对就不该命中"
+            "表组对、类型不对就不该命中"
         );
-        // 表身份是「作用域/类型」；作用域自己可以带斜杠（相加表的父名）
+        // 表身份是「表组/类型」；表组自己可以带斜杠（相加表的父名）
         assert_eq!(
             meta.table_by_key("full/word").map(|t| &t.path),
             Some(&"full".to_string())
@@ -742,7 +742,7 @@ mod tests {
     fn scope_and_table_key_helpers_round_trip() {
         assert_eq!(table_key("full", "word"), "full/word");
         assert_eq!(split_table_key("full/word"), ("full".into(), "word".into()));
-        // 作用域含斜杠时从右边切
+        // 表组含斜杠时从右边切
         assert_eq!(split_table_key("a/b/char"), ("a/b".into(), "char".into()));
         assert_eq!(sanitize_scope("新闻/财经"), "新闻_财经");
         assert_eq!(sanitize_scope("  ..  "), "未命名");

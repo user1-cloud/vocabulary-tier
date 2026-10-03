@@ -26,7 +26,7 @@
 
 .EXAMPLE
   .\tools\build-desktop.ps1              # 只出 exe
-  .\tools\prepare-seed.ps1               # 出安装包前先组装预置词库/词表
+  .\tools\prepare-seed.ps1               # 出安装包前先组装预置词典/词频表
   .\tools\build-desktop.ps1 -Bundle      # 连同安装包
   .\tools\build-desktop.ps1 -Check       # 检查现有 exe 是不是生产模式
 #>
@@ -100,8 +100,8 @@ Push-Location $desktop
 try {
     # 出安装包前先把预置内容检查掉。
     #
-    # 安装钩子（src-tauri\nsis\installer-hooks.nsh）用 NSIS 的 `File /r` 把预置词库与
-    # 预置词表直接写进用户数据目录（刻意不走 bundle.resources —— 那条路会落到
+    # 安装钩子（src-tauri\nsis\installer-hooks.nsh）用 NSIS 的 `File /r` 把预置词典与
+    # 预置词频表直接写进用户数据目录（刻意不走 bundle.resources —— 那条路会落到
     # Program Files，普通用户不可写，而预置内容必须能被用户删改）。
     # 而 `File /r` 遇到**空目录**会让 makensis 直接构建失败，所以在这里拦一道，
     # 给一句能照着做的提示，而不是让用户去读 makensis 的天书。
@@ -118,7 +118,7 @@ $d 是空的（或不存在），出安装包前必须先组装预置内容：
 
     .\tools\prepare-seed.ps1
 
-如果 assets\seed\dicts\ 里还没有词库原件，再加 -RefreshDict。
+如果 assets\seed\dicts\ 里还没有词典原件，再加 -RefreshDict。
 "@
             }
         }

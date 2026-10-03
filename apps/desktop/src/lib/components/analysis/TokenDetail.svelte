@@ -74,15 +74,15 @@ let {
 
 const dark = $derived(isDark());
 
-/** 查字表还是查词表：以后端给的 single_cjk / table 为准 */
+/** 查字表还是查词频表：以后端给的 single_cjk / table 为准 */
 const isChar = $derived(token !== null && (token.single_cjk || token.table === 'char'));
 const kind = $derived<'word' | 'char'>(isChar ? 'char' : 'word');
 
 /**
- * **主作用域**里这一类的那张表 —— 详情面板的一切数字都以它为准。
+ * **主表组**里这一类的那张表 —— 详情面板的一切数字都以它为准。
  *
- * 主作用域由用户指定（`settings.primaryScope`），默认 `full`；产物里没有它时
- * 回落到该类的第一张表。**不能写死 `full/word`**：铺平之后 `full` 只是普通作用域
+ * 主表组由用户指定（`settings.primaryScope`），默认 `full`；产物里没有它时
+ * 回落到该类的第一张表。**不能写死 `full/word`**：铺平之后 `full` 只是普通表组
  * 之一，用户完全可以把 `news` 或某张相加表设为主表 —— 那时详情里的前%、分组
  * 都必须按那张表算，否则和 token 上的颜色对不上。
  */

@@ -46,9 +46,9 @@ enum Cmd {
         rules: Option<PathBuf>,
     },
 
-    /// 统计并产出频率表（**默认只产各作用域自己的表，不含 `full`**）
+    /// 统计并产出频率表（**默认只产各表组自己的表，不含 `full`**）
     ///
-    /// `full` 由「`merge` 合流多份产物 + `compose` 把作用域相加」得到：分域分次扫描时
+    /// `full` 由「`merge` 合流多份产物 + `compose` 把表组相加」得到：表组分次扫描时
     /// 每次 scan 都写一遍 full 纯属浪费（而且会冲掉前几次的结果，见 docs/DATA_LAYOUT.md §七）。
     /// 需要一份全量对照基准就加 `--full`。
     Scan(Box<ScanArgs>),
@@ -85,18 +85,18 @@ enum Cmd {
         /// 开启 HMM 新词发现（须与建表时一致）
         #[arg(long)]
         hmm: bool,
-        /// 词库来源。不给则用建表时 `meta.json` 里记录的那条链
+        /// 词典来源。不给则用建表时 `meta.json` 里记录的那条链
         #[command(flatten)]
         dicts: DictArgs,
         /// 用 ANSI 真彩色显示分组配色
         #[arg(long)]
         color: bool,
-        /// 只看这些分域的排名
+        /// 只看这些表组的排名
         #[arg(long, value_delimiter = ',')]
         domains: Vec<String>,
     },
 
-    /// 从一份已有的产物目录里摘出「预置词表」，供安装包随包携带。
+    /// 从一份已有的产物目录里摘出「预置词频表」，供安装包随包携带。
     ///
     /// 为什么要用工具来做这件事、而不是脚本拼 JSON：`meta.json` 里
     /// `tier_stats[].max_rank` 用的是 `u64::MAX`（18446744073709551615），
@@ -104,10 +104,10 @@ enum Cmd {
     /// `1.8446744073709552E+19`，之后 Rust 侧根本反序列化不回来。
     PrepareSeed(Box<PrepareSeedArgs>),
 
-    /// 把若干张表**相加**成一张新表（各作用域平等，全量表只是"全部相加"的结果）
+    /// 把若干张表**相加**成一张新表（各表组平等，全量表只是"全部相加"的结果）
     Compose(Box<ComposeArgs>),
 
-    /// 把**若干份产物合流**成一份（各源产物的词库链与分词口径必须完全一致）
+    /// 把**若干份产物合流**成一份（各源产物的词典链与分词口径必须完全一致）
     Merge(Box<MergeArgs>),
 
     /// 前%换算：前%上界 ↔ 排名阈值（默认分组口径就是前%）
@@ -115,7 +115,7 @@ enum Cmd {
         /// vocfreq scan 的产物目录
         #[arg(long)]
         data: PathBuf,
-        /// 表身份：`作用域/类型`，例如 full/word、news/char
+        /// 表身份：`表组/类型`，例如 full/word、news/char
         #[arg(long, default_value = "full/word")]
         table: String,
         /// 要换算的前%上界（百分数）。不给就用该类型的默认口径
@@ -126,12 +126,12 @@ enum Cmd {
         ranks: Vec<u32>,
     },
 
-    /// 从已生成的词表里重新导出「词典外候选词」，无需重跑统计
+    /// 从已生成的词频表里重新导出「词典外候选词」，无需重跑统计
     Oov {
         /// vocfreq scan 的产物目录
         #[arg(long)]
         data: PathBuf,
-        /// 用哪个作用域的词表（要该作用域写出过可读 TSV）
+        /// 用哪个表组的词频表（要该表组写出过可读 TSV）
         #[arg(long, default_value = "full")]
         scope: String,
         /// 最小频次
@@ -155,7 +155,7 @@ enum Cmd {
         /// vocfreq scan 的产物目录
         #[arg(long)]
         data: PathBuf,
-        /// 表路径：full/word、full/char、domains/<域>/word、domains/<域>/char
+        /// 表路径：full/word、full/char、domains/<表组>/word、domains/<表组>/char
         #[arg(long, default_value = "full/word")]
         table: String,
         /// 曲线采样点数
@@ -171,18 +171,18 @@ enum Cmd {
     },
 }
 
-/// 词库来源的三个选项。`scan` 与 `segment` 共用，所以抽出来一份 ——
+/// 词典来源的三个选项。`scan` 与 `segment` 共用，所以抽出来一份 ——
 /// 两处各抄一遍迟早会不同步。
 #[derive(clap::Args, Clone)]
 struct DictArgs {
-    /// 指定词库（jieba 格式：词 词频 词性，词频与词性可省略）。可重复，
-    /// **第一份是主词库**，其余依次叠加
+    /// 指定词典（jieba 格式：词 词频 词性，词频与词性可省略）。可重复，
+    /// **第一份是主词典**，其余依次叠加
     #[arg(long = "dict", value_name = "FILE")]
     dict: Vec<PathBuf>,
-    /// 从目录里取所有 .dict 组成词库链（按文件名排序），排在 --dict 之后
+    /// 从目录里取所有 .dict 组成词典链（按文件名排序），排在 --dict 之后
     #[arg(long, value_name = "DIR")]
     dict_dir: Option<PathBuf>,
-    /// 追加叠加词库（可重复），排在最后。里面的词会被标记成「来自用户词典」
+    /// 追加叠加词典（可重复），排在最后。里面的词会被标记成「来自用户词典」
     #[arg(long, value_name = "FILE")]
     user_dict: Vec<PathBuf>,
 }
@@ -201,29 +201,29 @@ struct ScanArgs {
     /// 开启 HMM 新词发现（默认关闭，以保证结果可复现）
     #[arg(long)]
     hmm: bool,
-    /// 词库来源
+    /// 词典来源
     #[command(flatten)]
     dicts: DictArgs,
     /// 自定义语料解析规则 JSON
     #[arg(long)]
     rules: Option<PathBuf>,
-    /// 只统计这些域（逗号分隔）；默认全部
+    /// 只统计这些表组（逗号分隔）；默认全部
     #[arg(long, value_delimiter = ',')]
     domains: Vec<String>,
-    /// 不产出各分域的子表。要和 `--full` 一起用，否则产物里一张表都没有
+    /// 不产出各表组的子表。要和 `--full` 一起用，否则产物里一张表都没有
     #[arg(long)]
     no_domains: bool,
-    /// **顺带产出全量作用域 `full`**。
+    /// **顺带产出全量表组 `full`**。
     ///
-    /// 默认不产：`full` 一律由「`vocfreq merge` 合流分域产物 + `vocfreq compose` 把
-    /// 各作用域相加」得到（见 docs/DATA_LAYOUT.md §七）。这个开关只有两个用途：
+    /// 默认不产：`full` 一律由「`vocfreq merge` 合流表组产物 + `vocfreq compose` 把
+    /// 各表组相加」得到（见 docs/DATA_LAYOUT.md §七）。这个开关只有两个用途：
     /// 一次性全量扫一遍留一份**对照基准**，以及只想要一张全量表时。
     #[arg(long)]
     full: bool,
     /// 只保留出现次数 >= N 的词条
     #[arg(long, default_value_t = 1)]
     min_count: u64,
-    /// 是否把纯数字 token 也计入（默认丢弃，保持词表干净）
+    /// 是否把纯数字 token 也计入（默认丢弃，保持词频表干净）
     #[arg(long)]
     keep_digit: bool,
     /// 丢弃纯英文 token
@@ -246,7 +246,7 @@ struct ScanArgs {
 /// `compose` 的参数。
 #[derive(clap::Args)]
 struct ComposeArgs {
-    /// 源产物目录。可给多个：**源表可以跨产物**，但各产物的词库链与分词口径
+    /// 源产物目录。可给多个：**源表可以跨产物**，但各产物的词典链与分词口径
     /// 必须完全一致，否则直接报错拒绝（这是相加正确性的硬门槛）。
     #[arg(
         long = "from-data",
@@ -255,16 +255,16 @@ struct ComposeArgs {
         value_delimiter = ','
     )]
     from_data: Vec<PathBuf>,
-    /// 要相加的表，`作用域/类型` 形式。可重复
+    /// 要相加的表，`表组/类型` 形式。可重复
     #[arg(long = "source", value_name = "[SCOPE/]KIND", required = true)]
     sources: Vec<String>,
-    /// 新作用域的名字（会变成目录名）
+    /// 新表组的名字（会变成目录名）
     #[arg(long)]
     scope: String,
     /// 只要这一类（`word` 或 `char`）；不给 = 源表里出现过的每一类都相加
     #[arg(long)]
     kind: Option<String>,
-    /// 输出目录；不给 = 写回第一个 `--from-data`（新作用域成为同一份产物里的另一张表）
+    /// 输出目录；不给 = 写回第一个 `--from-data`（新表组成为同一份产物里的另一张表）
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -272,7 +272,7 @@ struct ComposeArgs {
 /// `merge` 的参数。
 #[derive(clap::Args)]
 struct MergeArgs {
-    /// 源产物目录。至少两份 —— 每份是一次独立 `scan` 的产物（通常只有自己的那个域）
+    /// 源产物目录。至少两份 —— 每份是一次独立 `scan` 的产物（通常只有自己的那个表组）
     #[arg(
         long = "from-data",
         value_name = "DIR",
@@ -291,13 +291,13 @@ struct MergeArgs {
 /// `prepare-seed` 的参数。
 #[derive(clap::Args)]
 struct PrepareSeedArgs {
-    /// 源产物目录（要有 meta.json 与各作用域的 *.vfr）
+    /// 源产物目录（要有 meta.json 与各表组的 *.vfr）
     #[arg(long)]
     from_data: PathBuf,
-    /// 预置词表要绑定到的那份词库文件。它的指纹与词条数会写进产物的 meta.json
+    /// 预置词频表要绑定到的那份词典文件。它的指纹与词条数会写进产物的 meta.json
     #[arg(long)]
     dict: PathBuf,
-    /// 输出目录：会写入 meta.json 与各作用域的表
+    /// 输出目录：会写入 meta.json 与各表组的表
     #[arg(long)]
     out: PathBuf,
     /// 出厂时展示的语料库描述。
@@ -315,22 +315,22 @@ struct PrepareSeedArgs {
 /// 出厂用的语料库描述：只说"是什么样的语料"，不带任何绝对路径。
 fn neutral_corpus_label(meta: &artifact::Meta) -> String {
     format!(
-        "预置语料库：{} 个域 / {} 个文件 / {:.1} GiB",
+        "预置语料库：{} 个表组 / {} 个文件 / {:.1} GiB",
         meta.domains.len(),
         meta.totals.files,
         meta.totals.bytes as f64 / (1024.0 * 1024.0 * 1024.0)
     )
 }
 
-/// 从一份已有的产物目录里摘出「预置词表」。
+/// 从一份已有的产物目录里摘出「预置词频表」。
 ///
 /// 做四件出厂前必须做的事：
-/// 1. **把词库链钉成一份**并写入它的指纹 —— 这样用户在数据文件夹里换了词库之后，
-///    界面能立刻告诉他"这张预置表对应的词库已经变了"。
-/// 2. **把全部作用域一起带上**（不只 `full`）。装完之后用户在表管理页就能按分域
-///    对比，也能自己把几个域相加成主表 —— 只带一张全量表等于把这条路堵死了。
+/// 1. **把词典链钉成一份**并写入它的指纹 —— 这样用户在数据文件夹里换了词典之后，
+///    界面能立刻告诉他"这张预置表对应的词典已经变了"。
+/// 2. **把全部表组一起带上**（不只 `full`）。装完之后用户在表管理页就能按表组
+///    对比，也能自己把几个表组相加成主表 —— 只带一张全量表等于把这条路堵死了。
 /// 3. **抹掉语料库的绝对路径**，换成一句中性的描述。
-/// 4. 校验一遍：每个作用域都得有词表，缺了就地报错，而不是留一份半截的预置内容
+/// 4. 校验一遍：每个表组都得有词频表，缺了就地报错，而不是留一份半截的预置内容
 ///    让用户装完才发现。
 fn cmd_prepare_seed(a: PrepareSeedArgs) -> Result<()> {
     let meta_path = a.from_data.join("meta.json");
@@ -340,19 +340,19 @@ fn cmd_prepare_seed(a: PrepareSeedArgs) -> Result<()> {
         .with_context(|| format!("{} 不是合法的 meta.json", meta_path.display()))?;
 
     let rd =
-        dict::read_dict(&a.dict).with_context(|| format!("读取词库 {} 失败", a.dict.display()))?;
+        dict::read_dict(&a.dict).with_context(|| format!("读取词典 {} 失败", a.dict.display()))?;
     if rd.report.freq_zero > 0 {
         eprintln!(
-            "[warn] 词库 {} 里有 {} 条把词频显式写成了 0，这些词永远切不出来",
+            "[warn] 词典 {} 里有 {} 条把词频显式写成了 0，这些词永远切不出来",
             rd.dict.name, rd.report.freq_zero
         );
     }
 
-    // 1) 词库链只留这一份，并清掉 v1 的两个兼容字段（新产物不该再写它们）
+    // 1) 词典链只留这一份，并清掉 v1 的两个兼容字段（新产物不该再写它们）
     //
     //    `path` 刻意清空：出厂产物里塞一个构建机的绝对路径，既把目录结构泄了出去
     //    （build-desktop.ps1 花了力气把这类路径从 exe 里抹掉），又毫无用处 ——
-    //    装到用户机器上那个路径根本不存在。校验只认 sha256，找回词库则靠
+    //    装到用户机器上那个路径根本不存在。校验只认 sha256，找回词典则靠
     //    「数据文件夹的 tables\ 与 dicts\ 同级」这条布局约定（见 CLI 的
     //    `chain_from_meta` 与桌面端的 `library::resolve_chain`）。
     let mut seed_ref = rd.dict.clone();
@@ -368,15 +368,15 @@ fn cmd_prepare_seed(a: PrepareSeedArgs) -> Result<()> {
         .unwrap_or_else(|| neutral_corpus_label(&meta));
     meta.schema_version = artifact::SCHEMA_VERSION;
 
-    // 3) 全部作用域都带上。至少要有一张词表，否则这份预置内容查不了词。
+    // 3) 全部表组都带上。至少要有一张词频表，否则这份预置内容查不了词。
     if meta.tables.iter().all(|t| t.kind != "word") {
         bail!(
-            "{} 里一张词表都没有，预置内容必须至少带一张 word 表",
+            "{} 里一张词频表都没有，预置内容必须至少带一张 word 表",
             meta_path.display()
         );
     }
 
-    // 4) 写 meta.json + 拷各作用域的表
+    // 4) 写 meta.json + 拷各表组的表
     std::fs::create_dir_all(&a.out)?;
     artifact::write_meta(&a.out.join("meta.json"), &meta)?;
 
@@ -415,10 +415,10 @@ fn cmd_prepare_seed(a: PrepareSeedArgs) -> Result<()> {
         }
     }
 
-    println!("✅ 预置词表「{}」已生成", a.table_name);
+    println!("✅ 预置词频表「{}」已生成", a.table_name);
     println!("   输出：{}", a.out.display());
-    println!("   词库：{}", rd.dict.short());
-    println!("   作用域 {} 个：{}", scopes.len(), scopes.join(" / "));
+    println!("   词典：{}", rd.dict.short());
+    println!("   表组 {} 个：{}", scopes.len(), scopes.join(" / "));
     for t in &meta.tables {
         println!(
             "   表 {}：{} 条 / {} token",
@@ -431,7 +431,7 @@ fn cmd_prepare_seed(a: PrepareSeedArgs) -> Result<()> {
     println!("   语料库描述：{}", meta.corpus_root);
     println!(
         "\n接下来把输出目录放进安装包的 seed\\tables\\<表名>\\ 下（见 tools\\prepare-seed.ps1）。\n\
-         装完之后用户可以在「表管理」页任选一个作用域当主表，也可以把几个域相加成一张新表。"
+         装完之后用户可以在「表管理」页任选一个表组当主表，也可以把几个表组相加成一张新表。"
     );
     Ok(())
 }
@@ -506,7 +506,7 @@ fn cmd_curve(data: PathBuf, table: String, points: usize, targets: Vec<f64>) -> 
         Dataset::open(&data).with_context(|| format!("打开产物目录 {} 失败", data.display()))?;
     let t = ds.table_by_key(&table).ok_or_else(|| {
         anyhow::anyhow!(
-            "找不到表 {table}；可用取值是「作用域名/类型」，例如 full/word、news/char。\n\
+            "找不到表 {table}；可用取值是「表组名/类型」，例如 full/word、news/char。\n\
              本产物里有：{}",
             ds.tables
                 .iter()
@@ -641,10 +641,10 @@ fn cmd_pct(data: PathBuf, table: String, pcts: Vec<f64>, ranks: Vec<u32>) -> Res
 
 /// 把若干张表相加成一张新表。
 ///
-/// 相加在数学上是精确的：`scan` 本身就是"逐作用域扫完再累加"，每个 token 只属于一个
-/// 作用域，所以各作用域表相加 == 全量扫描出来的表（逐条相等，有测试钉住）。
+/// 相加在数学上是精确的：`scan` 本身就是"逐表组扫完再累加"，每个 token 只属于一个
+/// 表组，所以各表组表相加 == 全量扫描出来的表（逐条相等，有测试钉住）。
 ///
-/// 源表**可以跨产物**（全量语料放不下时只能分几次扫），前提是各产物的词库链与分词
+/// 源表**可以跨产物**（全量语料放不下时只能分几次扫），前提是各产物的词典链与分词
 /// 口径完全一致 —— 这一关由核心库严格校验，不一致就报错拒绝。
 fn cmd_compose(a: ComposeArgs) -> Result<()> {
     let first = a
@@ -671,7 +671,7 @@ fn cmd_compose(a: ComposeArgs) -> Result<()> {
         )
     })?;
 
-    println!("✅ 相加完成：作用域「{}」", a.scope);
+    println!("✅ 相加完成：表组「{}」", a.scope);
     for c in &written {
         println!(
             "   {} 表：{} 条 / {} token / {:.1} MB",
@@ -683,7 +683,7 @@ fn cmd_compose(a: ComposeArgs) -> Result<()> {
         println!("   来源：{}", c.sources.join(" + "));
     }
     println!("   落地：{}", written[0].out);
-    println!("\n它现在和别的表完全平级：可以当主作用域（设置里的 primaryScope），也可以再被相加。");
+    println!("\n它现在和别的表完全平级：可以当主表组（设置里的 primaryScope），也可以再被相加。");
     Ok(())
 }
 
@@ -691,10 +691,10 @@ fn cmd_compose(a: ComposeArgs) -> Result<()> {
 
 /// 把若干份独立产物**合流**成一份。
 ///
-/// 这是"全量语料放不下、只能一个域一个域扫"那条工作流的中间一步：每份产物各扫一个域，
-/// 合流成一份标准产物，再用 `compose` 把各作用域相加出 `full`。
+/// 这是"全量语料放不下、只能一个表组一个表组扫"那条工作流的中间一步：每份产物各扫一个表组，
+/// 合流成一份标准产物，再用 `compose` 把各表组相加出 `full`。
 ///
-/// 硬门槛是各源产物的**词库链与分词口径完全一致**（逐份校验、比内容指纹）。不一致就
+/// 硬门槛是各源产物的**词典链与分词口径完全一致**（逐份校验、比内容指纹）。不一致就
 /// 报错拒绝，并指出是哪一份产物、哪个字段不同 —— 绝不静默合并，也绝不产出半截产物。
 fn cmd_merge(a: MergeArgs) -> Result<()> {
     let spec = vocfreq_core::merge::MergeSpec {
@@ -719,7 +719,7 @@ fn cmd_merge(a: MergeArgs) -> Result<()> {
         println!("     {p}");
     }
     println!("   目标产物：{}", r.out);
-    println!("   作用域 {} 个：{}", r.scopes.len(), r.scopes.join(" / "));
+    println!("   表组 {} 个：{}", r.scopes.len(), r.scopes.join(" / "));
     println!(
         "   表 {} 张 / {} 条 / {} token / {:.1} MB",
         r.tables,
@@ -728,8 +728,8 @@ fn cmd_merge(a: MergeArgs) -> Result<()> {
         r.bytes as f64 / 1e6
     );
     println!(
-        "\n下一步：把各作用域相加出 full ——\n  \
-         vocfreq compose --from-data {} --source <域>/word ... --scope full\n\
+        "\n下一步：把各表组相加出 full ——\n  \
+         vocfreq compose --from-data {} --source <表组>/word ... --scope full\n\
          合流产物是一份**标准产物**，桌面端的「表管理」也能直接打开它。",
         r.out
     );
@@ -738,10 +738,10 @@ fn cmd_merge(a: MergeArgs) -> Result<()> {
 
 // ---------------------------------------------------------------- oov
 
-/// 从已有的 `<作用域>/word.tsv` 重新导出词典外候选词。
+/// 从已有的 `<表组>/word.tsv` 重新导出词典外候选词。
 ///
 /// 这样调筛选条件（最小频次、词长、是否只留汉字）时不必重跑几十分钟的统计。
-/// 词表本身按频次降序，所以输出天然也是按频次降序。
+/// 词频表本身按频次降序，所以输出天然也是按频次降序。
 fn cmd_oov(
     data: PathBuf,
     min_count: u64,
@@ -757,7 +757,7 @@ fn cmd_oov(
         bail!(
             "{} 不存在。\n\
              `oov` 读的是可读 TSV，而它只在统计时带 --tsv（默认带）才会写出来；\n\
-             另外作用域名要写对（现在的做法是每个作用域一个目录，例如 full、news）。",
+             另外表组名要写对（现在的做法是每个表组一个目录，例如 full、news）。",
             tsv.display()
         );
     }
@@ -807,7 +807,7 @@ fn cmd_oov(
     let dst = data.join("oov_candidates.tsv");
     vocfreq_core::artifact::write_oov(&dst, &out)?;
     println!(
-        "扫描 {scanned} 条词表，词典外且符合条件的共 {kept} 条，已写入 {}（{:.1} KB）",
+        "扫描 {scanned} 条词频表，词典外且符合条件的共 {kept} 条，已写入 {}（{:.1} KB）",
         dst.display(),
         std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0) as f64 / 1024.0
     );
@@ -921,7 +921,7 @@ fn cmd_scan(a: ScanArgs) -> Result<()> {
                     ..
                 } => {
                     eprintln!(
-                        "发现 {files} 个文件 / {:.2} GB / {} 个域",
+                        "发现 {files} 个文件 / {:.2} GB / {} 个表组",
                         *bytes as f64 / 1e9,
                         domains.len()
                     );
@@ -962,7 +962,7 @@ fn cmd_scan(a: ScanArgs) -> Result<()> {
         println!();
     }
     println!("{}", vocfreq_core::artifact::describe(&meta));
-    // 分组覆盖率用于校准阈值。默认口径下 `scan` 不产 `full`，那就拿第一个作用域的词表
+    // 分组覆盖率用于校准阈值。默认口径下 `scan` 不产 `full`，那就拿第一个表组的词频表
     // 报一遍 —— 它仍然是"这张表的分布长什么样"，比什么都不打印有用。
     let sample = meta
         .table(vocfreq_core::artifact::SCOPE_FULL, "word")
@@ -972,7 +972,7 @@ fn cmd_scan(a: ScanArgs) -> Result<()> {
             println!("\n分组覆盖率（用于校准阈值，取自 {}/word）：", t.path);
             println!(
                 "  {:<6} {:<12} {:>10} 词  覆盖 {:>6.2}%  累计 {:>6.2}%",
-                "词表", "分组", "词条数", "占比", "累计"
+                "词频表", "分组", "词条数", "占比", "累计"
             );
             for s in &t.tier_stats {
                 println!(
@@ -985,7 +985,7 @@ fn cmd_scan(a: ScanArgs) -> Result<()> {
                 );
             }
         }
-        None => println!("\n（没有词表，跳过分组覆盖率）"),
+        None => println!("\n（没有词频表，跳过分组覆盖率）"),
     }
     if !cfg.write_full
         && meta
@@ -993,9 +993,9 @@ fn cmd_scan(a: ScanArgs) -> Result<()> {
             .is_none()
     {
         println!(
-            "\n下一步：把各分域的产物合流，再把作用域相加出 full ——\n  \
+            "\n下一步：把各表组的产物合流，再把表组相加出 full ——\n  \
              vocfreq merge --from-data <分片A> --from-data <分片B> --scope <表名> --out <产物目录>\n  \
-             vocfreq compose --from-data <产物目录> --source <域1>/word --source <域2>/word --scope full"
+             vocfreq compose --from-data <产物目录> --source <表组1>/word --source <表组2>/word --scope full"
         );
     }
     Ok(())
@@ -1013,7 +1013,7 @@ fn cmd_info(table: PathBuf) -> Result<()> {
         if h.kind == vocfreq_core::query::KIND_CHAR {
             "字表"
         } else {
-            "词表"
+            "词频表"
         }
     );
     println!("条目数    {}", h.entry_count);
@@ -1089,15 +1089,15 @@ const TIER_RGB: [(u8, u8, u8); 7] = [
 ];
 const UNKNOWN_RGB: (u8, u8, u8) = (0x98, 0xA2, 0xB3);
 
-/// 把 `--dict` / `--dict-dir` / `--user-dict` 解析成一条词库链。
+/// 把 `--dict` / `--dict-dir` / `--user-dict` 解析成一条词典链。
 ///
 /// 顺序：`--dict`（按给出顺序）→ `--dict-dir` 里的（按文件名排序）→ `--user-dict`
-/// （按给出顺序）。这样**主词库永远是显式指定的那一份**，目录扫描只用来补充，
-/// 不会悄悄顶替主词库。
+/// （按给出顺序）。这样**主词典永远是显式指定的那一份**，目录扫描只用来补充，
+/// 不会悄悄顶替主词典。
 ///
 /// 按规范化路径去重：`--dict main.dict --dict-dir dicts\` 这种写法很自然，
 /// 但 main.dict 会被列两次 —— 重复装载不报错，只是白费时间，还可能让
-/// 「叠加词库」的标记变得莫名其妙。
+/// 「叠加词典」的标记变得莫名其妙。
 fn resolve_dicts(
     dicts: &[PathBuf],
     dict_dir: &Option<PathBuf>,
@@ -1120,7 +1120,7 @@ fn resolve_dicts(
     if let Some(dir) = dict_dir {
         let found = dict::list_dicts(dir);
         if found.is_empty() {
-            bail!("{} 里没有 .dict 词库文件", dir.display());
+            bail!("{} 里没有 .dict 词典文件", dir.display());
         }
         for p in found {
             push(p, &mut chain);
@@ -1132,28 +1132,28 @@ fn resolve_dicts(
 
     if chain.is_empty() {
         bail!(
-            "没有词库。现在词库不再编进程序里，必须显式指定一个：\n  \
-             --dict <FILE>      指定一份词库；可重复，第一份是主词库\n  \
+            "没有词典。现在词典不再编进程序里，必须显式指定一个：\n  \
+             --dict <FILE>      指定一份词典；可重复，第一份是主词典\n  \
              --dict-dir <DIR>   取目录里所有 .dict（按文件名排序）\n  \
              桌面端的数据文件夹里默认放在 dicts\\ 子目录下。\n\
-             提示：词库格式是 jieba 的「词 词频 词性」，词频与词性可省略，\
+             提示：词典格式是 jieba 的「词 词频 词性」，词频与词性可省略，\
              以 # 开头的整行是注释。"
         );
     }
     Ok(chain)
 }
 
-/// 按 `meta.json` 记录的词库链，在**表所在目录**附近找回实际的词库文件。
+/// 按 `meta.json` 记录的词典链，在**表所在目录**附近找回实际的词典文件。
 ///
 /// 三种来源，按可靠性排序：
 ///
 /// 1. 记录里的绝对路径还活着 → 直接用。
-/// 2. **数据文件夹的约定布局**：表在 `<数据文件夹>\tables\<名字>\`，词库在同级的
+/// 2. **数据文件夹的约定布局**：表在 `<数据文件夹>\tables\<名字>\`，词典在同级的
 ///    `<数据文件夹>\dicts\`。出厂预置的表就是靠这一条 —— 它在 `path` 里**不记路径**
 ///    （记了会把构建机的目录结构泄露出厂产物，而且装到用户机器上那个路径根本不存在）。
-/// 3. 在 `dicts\` 里按 **sha256** 找 —— 用户把词库改过名也认得出来。
+/// 3. 在 `dicts\` 里按 **sha256** 找 —— 用户把词典改过名也认得出来。
 ///
-/// 每一处不一致都必须报出来：否则用户会拿一份跟词表对不上的词库去分析，
+/// 每一处不一致都必须报出来：否则用户会拿一份跟词频表对不上的词典去分析，
 /// 频次系统性偏错却毫不知情。但也只是警告，不阻断 —— 产物本身仍然能查。
 fn chain_from_meta(table_dir: &Path, m: &vocfreq_core::artifact::TokenizerMeta) -> Vec<PathBuf> {
     // `<表目录>\..\..\dicts` 就是数据文件夹的 dicts\
@@ -1186,7 +1186,7 @@ fn chain_from_meta(table_dir: &Path, m: &vocfreq_core::artifact::TokenizerMeta) 
                         r"（表不在数据文件夹的 tables\ 下，没有对应的 dicts\）".to_string()
                     });
                 eprintln!(
-                    "[warn] 找不到建表时用的词库「{}」。\n  \
+                    "[warn] 找不到建表时用的词典「{}」。\n  \
                      记录里的路径：{}\n  \
                      数据文件夹：{}\n  \
                      可用 --dict / --dict-dir 手动指定。",
@@ -1202,7 +1202,7 @@ fn chain_from_meta(table_dir: &Path, m: &vocfreq_core::artifact::TokenizerMeta) 
     out
 }
 
-/// 找一条记录对应的词库文件。
+/// 找一条记录对应的词典文件。
 fn resolve_one(rec: &vocfreq_core::dict::DictRef, dicts_dir: &Option<PathBuf>) -> Option<PathBuf> {
     // 1) 记录里的绝对路径（出厂预置表为空，自然跳过）
     if !rec.path.is_empty() {
@@ -1213,7 +1213,7 @@ fn resolve_one(rec: &vocfreq_core::dict::DictRef, dicts_dir: &Option<PathBuf>) -
     }
     let dir = dicts_dir.as_deref()?;
 
-    // 2) 指纹优先：用户把词库改过名也认得出来
+    // 2) 指纹优先：用户把词典改过名也认得出来
     if rec.is_verifiable() {
         for c in dict::list_dicts(dir) {
             if let Ok(h) = dict::sha256_file(&c) {
@@ -1224,24 +1224,24 @@ fn resolve_one(rec: &vocfreq_core::dict::DictRef, dicts_dir: &Option<PathBuf>) -
         }
     }
 
-    // 3) 按名字兜底（词库被改过 → 指纹不同，但仍是"同一份"）
+    // 3) 按名字兜底（词典被改过 → 指纹不同，但仍是"同一份"）
     let by_name = dir.join(format!("{}.dict", rec.name));
     by_name.exists().then_some(by_name)
 }
 
-/// 内容与建表时不一致就警告。**不阻断**：用户可能就是想试试新词库。
+/// 内容与建表时不一致就警告。**不阻断**：用户可能就是想试试新词典。
 fn warn_if_drifted(p: &Path, rec: &vocfreq_core::dict::DictRef) {
     if !rec.is_verifiable() {
         return;
     }
     match dict::sha256_file(p) {
         Ok(h) if !h.eq_ignore_ascii_case(&rec.sha256) => eprintln!(
-            "[warn] 词库 {} 的内容与建表时不一致（文件被改过，或换成了同名的另一份），\
-             分词结果可能与词表对不上",
+            "[warn] 词典 {} 的内容与建表时不一致（文件被改过，或换成了同名的另一份），\
+             分词结果可能与词频表对不上",
             p.display()
         ),
         Ok(_) => {}
-        Err(e) => eprintln!("[warn] 校验词库 {} 失败：{e}", p.display()),
+        Err(e) => eprintln!("[warn] 校验词典 {} 失败：{e}", p.display()),
     }
 }
 
@@ -1258,7 +1258,7 @@ fn cmd_segment(
         Dataset::open(&data).with_context(|| format!("打开产物目录 {} 失败", data.display()))?;
     if hmm != ds.meta.tokenizer.hmm {
         eprintln!(
-            "[warn] 你指定的 HMM={hmm} 与建表时的 HMM={} 不一致，分词结果可能与词表对不上",
+            "[warn] 你指定的 HMM={hmm} 与建表时的 HMM={} 不一致，分词结果可能与词频表对不上",
             ds.meta.tokenizer.hmm
         );
     }
@@ -1270,7 +1270,7 @@ fn cmd_segment(
         keep_digit: ds.meta.tokenizer.keep_digit,
         skip_single_char: ds.meta.tokenizer.skip_single_char,
     };
-    // 词库链必须跟建表时一致，否则分词结果对不上已经落盘的词表，查出来的频次会
+    // 词典链必须跟建表时一致，否则分词结果对不上已经落盘的词频表，查出来的频次会
     // 系统性偏错。所以默认照 meta.json 记录的链重建，只有用户显式给了才覆盖。
     let explicit =
         !dicts.dict.is_empty() || dicts.dict_dir.is_some() || !dicts.user_dict.is_empty();
@@ -1281,15 +1281,15 @@ fn cmd_segment(
     };
     if chain.is_empty() {
         bail!(
-            "没有可用的词库，无法重建分词器。\n\
+            "没有可用的词典，无法重建分词器。\n\
              产物里记录的是：{}\n\
-             请用 --dict <FILE> 或 --dict-dir <DIR> 指定现在用哪份词库。",
+             请用 --dict <FILE> 或 --dict-dir <DIR> 指定现在用哪份词典。",
             dict::describe_chain(&ds.meta.tokenizer.resolved_dicts())
         );
     }
 
     let tk = Tokenizer::from_dicts(&chain, opts)
-        .with_context(|| format!("装载词库链失败（共 {} 份）", chain.len()))?;
+        .with_context(|| format!("装载词典链失败（共 {} 份）", chain.len()))?;
 
     let input = if text.is_empty() {
         let mut s = String::new();
@@ -1376,7 +1376,7 @@ fn cmd_segment(
             marks.push("单字→字表");
         }
         if t.table == "word" && t.count.is_none() {
-            marks.push("词表未收录");
+            marks.push("词频表未收录");
         }
         // 「各表对比」一律用前%：排名绝对值跨表不可比，前%可以。
         let cmp: Vec<String> = t
@@ -1415,7 +1415,7 @@ fn cmd_segment(
         .table(&ds.primary_scope, "word")
         .map(|m| m.effective_tier_pct())
         .unwrap_or_default();
-    println!("\n主作用域：{}", ds.primary_scope);
+    println!("\n主表组：{}", ds.primary_scope);
     print!("图例：");
     for (i, t) in tiers.iter().enumerate() {
         // 前%口径才是主口径，图例直接给前%，排名绝对值只在没有前%数据时才用

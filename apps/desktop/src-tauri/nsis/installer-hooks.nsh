@@ -1,5 +1,5 @@
 ; ============================================================================
-; VocTier 安装钩子：把预置词库与预置词表直接写进**用户数据目录**，
+; VocTier 安装钩子：把预置词典与预置词频表直接写进**用户数据目录**，
 ; 而不是释放到 $INSTDIR。
 ;
 ; 为什么不用 bundle.resources：那条路的语义就是"释放到 $INSTDIR"，而
@@ -50,14 +50,14 @@
   CreateDirectory "${VOCTIER_DATA_DIR}\dicts"
   CreateDirectory "${VOCTIER_DATA_DIR}\tables"
 
-  ; 词库：整目录铺进去。用 *.* 而不是只给目录名 ——
+  ; 词典：整目录铺进去。用 *.* 而不是只给目录名 ——
   ; `File /r "<dir>"` 会多套一层同名目录，`File /r "<dir>\*.*"` 才是把
   ; 目录**内容**铺进 $OUTDIR。用通配符还有个好处：这里不出现中文文件名，
   ; 少一个编码相关的失败面。
   SetOutPath "${VOCTIER_DATA_DIR}\dicts"
   File /r "${VOCTIER_SEED_ROOT}\dicts\*.*"
 
-  ; 词表：同理。里面是 <表名>\meta.json + <表名>\full\*.vfr，以及
+  ; 词频表：同理。里面是 <表名>\meta.json + <表名>\full\*.vfr，以及
   ; <表名>.origin（来源标记，让应用知道这是预置的而只是"显示成预置"，
   ; 不附加任何权限限制）。
   SetOutPath "${VOCTIER_DATA_DIR}\tables"

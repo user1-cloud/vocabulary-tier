@@ -126,7 +126,7 @@
   function tierIndexOfToken(token: TokenInfo): number | null {
     if (!meta) return token.tier;
     const kind = token.single_cjk || token.table === 'char' ? 'char' : 'word';
-    // 阈值取自**主作用域**那张表（小窗与主窗口必须是同一套口径，否则同一句话两处颜色不同）
+    // 阈值取自**主表组**那张表（小窗与主窗口必须是同一套口径，否则同一句话两处颜色不同）
     const index = activeTierIndex(kind, token.rank, meta, primaryTableKey(meta, kind));
     return index ?? token.tier;
   }
@@ -191,7 +191,7 @@
 
     // 当前打开的那张表：**取**后端的，不再用 settings.dataDir 拼路径 ——
     // dataDir 现在是「数据文件夹」（里面是 dicts\ 与 tables\），它下面没有 meta.json。
-    // 也不再需要 open_dataset：后端在启动 / 激活时已经按词库链重建过分词器。
+    // 也不再需要 open_dataset：后端在启动 / 激活时已经按词典链重建过分词器。
     const current = await activeDataset();
     meta = current.ok && current.data ? current.data : null;
 
@@ -538,7 +538,7 @@
   </div>
 
   <!-- 词条详情：**能长大到不用滚动**，也能在窗口变矮时让位。
-       实测「骨架（词头+四格+徽标行）+ 各分域排名 + 未收录说明」最多需要约 270px。
+       实测「骨架（词头+四格+徽标行）+ 各表组排名 + 未收录说明」最多需要约 270px。
        `flex: 3 1 auto` 里那个 **3** 是关键：它和中栏（grow 1）按 1:3 分多余空间，
        实测窗高 ≥520 时详情区就能长到「内容全放下、不用滚动、一眼看尽」，
        同时中栏还能保留约 147px（≈5 行 token）。给 1:1 会差 20 多像素、
