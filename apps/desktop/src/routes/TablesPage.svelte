@@ -2,7 +2,7 @@
   /**
    * 表管理 —— 三件事：
    *
-   *   A. **频率表清单**：产物里每个**作用域**各有一张词表 + 一张字表，它们**完全平级**
+   *   A. **频率表清单**：产物里每个**作用域**各有一张词频表 + 一张字表，它们**完全平级**
    *      （`full` 只是"所有域加在一起"的那一个，没有任何特权）。这里只有一张统一清单，
    *      不再分「全库表 / 分域表」两个区。
    *   B. **主词频表**：指定哪一张决定"这个词有多常见"。划句分析的着色与分组、
@@ -87,7 +87,7 @@
     type TierMethod,
   } from '$lib/types';
 
-  /** 数据文件夹那一块的文案 key（与「词库管理」页共用同一批） */
+  /** 数据文件夹那一块的文案 key（与「词典管理」页共用同一批） */
   const ORIGIN_LABELS: Record<Origin, MessageKey> = {
     seeded: 'dicts.origin.seeded',
     imported: 'dicts.origin.imported',
@@ -147,7 +147,7 @@
   let loading = $state(true);
   let loadError = $state('');
 
-  // ------------------------------------------------- 数据文件夹（词表管理）
+  // ------------------------------------------------- 数据文件夹（词频表管理）
   /** 数据文件夹的整体状况（`library_info`） */
   let library = $state<LibraryInfo | null>(null);
   /** `table_list()` 的全部表：数据文件夹里的 + 数据文件夹之外那张激活的 */
@@ -160,10 +160,12 @@
   let pendingTableDelete = $state<string | null>(null);
 
   // ------------------------------------------------- 相加
-  /** 勾选要相加的表身份（`作用域/类型`） */
+  /** 勾选要相加的**作用域**（域相加：整域的 word+char 一起加） */
   let composePicks = $state<string[]>([]);
   /** 新作用域的名字 */
   let composeName = $state('');
+  /** 用户是否手动改过新表名：一旦手动输入过就不再自动覆盖，直到清空/重置 */
+  let composeNameTouched = $state(false);
   let composeBusy = $state(false);
   let composeError = $state('');
   let composeDone = $state('');
@@ -179,7 +181,7 @@
   /** 编辑中的覆盖率目标（0..1），覆盖率模式用 */
   let coverage = $state<number[]>([]);
 
-  /** 覆盖率曲线缓存（主作用域的词表 / 字表） */
+  /** 覆盖率曲线缓存（主作用域的词频表 / 字表） */
   let curves = $state<{ word: TierCurve | null; char: TierCurve | null }>({ word: null, char: null });
   let curveBusy = $state(false);
   let curveError = $state('');
@@ -225,9 +227,9 @@
   });
 
   /**
-   * 数据文件夹里现存的词库名（含文件名去后缀与 `dict.name`）。
+   * 数据文件夹里现存的词典名（含文件名去后缀与 `dict.name`）。
    *
-   * 表里记录的 `dicts[].name` 对着它查一遍，就能在界面上说"这份词库还在不在"——
+   * 表里记录的 `dicts[].name` 对着它查一遍，就能在界面上说"这份词典还在不在"——
    * `binding` 已经从后端拿到了结论，这里只是给同义词/改名的情况兜个底。
    */
   const knownDictNames = $derived.by(() => {
@@ -246,7 +248,7 @@
     return wordEntriesOf(item.meta);
   }
 
-  /** 该表记录的词库链里，现在已经不在数据文件夹里的那些名字 */
+  /** 该表记录的词典链里，现在已经不在数据文件夹里的那些名字 */
   function absentDicts(item: TableItem): string[] {
     const refs = item.meta?.tokenizer.dicts ?? [];
     return refs
@@ -390,7 +392,7 @@
     loadError = '';
     tablesError = '';
 
-    // 数据文件夹状况 + 词表清单 + 词库清单（词表清单要用词库清单判断"词库还在不在"）
+    // 数据文件夹状况 + 词频表清单 + 词典清单（词频表清单要用词典清单判断"词典还在不在"）
     const [infoRes, tablesRes, dictsRes] = await Promise.all([
       libraryInfo(),
       tableList(),
@@ -417,13 +419,13 @@
       return;
     }
     meta = current.data;
-    // 后端在启动 / 激活时已经按 meta.tokenizer 的词库链重建过分词器了，这里只需取 meta
+    // 后端在启动 / 激活时已经按 meta.tokenizer 的词典链重建过分词器了，这里只需取 meta
     loading = false;
   }
 
-  // ---------------------------------------------------------------- 词表管理
+  // ---------------------------------------------------------------- 词频表管理
 
-  /** 重新拉一次数据文件夹状况与词表清单 */
+  /** 重新拉一次数据文件夹状况与词频表清单 */
   async function refreshTables() {
     const [infoRes, tablesRes, dictsRes] = await Promise.all([
       libraryInfo(),
@@ -440,7 +442,7 @@
     if (dictsRes.ok) dicts = dictsRes.data;
   }
 
-  /** 激活某张表：后端会按它记录的词库链重建分词器，并把 meta 换成这张表的 */
+  /** 激活某张表：后端会按它记录的词典链重建分词器，并把 meta 换成这张表的 */
   async function activateTable(item: TableItem) {
     tableBusy = item.name;
     const res = await activateLibraryTable(item.name);
@@ -468,7 +470,7 @@
     requestScanPrefill({
       corpus: item.meta?.corpus_root ?? '',
       tableName: item.name,
-      // 用该表记录的词库链预勾选（名字就是 `dicts\` 下的文件名）；空数组 = 用全部
+      // 用该表记录的词典链预勾选（名字就是 `dicts\` 下的文件名）；空数组 = 用全部
       dictFiles: tokenizer
         ? tokenizer.dicts.map((ref) => ref.name || ref.id).filter(Boolean)
         : [],
@@ -519,7 +521,7 @@
   /**
    * 绑定状态 → 徽标样式与文案 key。
    *
-   * 词库外置之后，**一张表的频次是否可信**取决于它记录的词库链现在还成不成立。
+   * 词典外置之后，**一张表的频次是否可信**取决于它记录的词典链现在还成不成立。
    * 所以四种状态各有颜色与文案，不能只给个图标。
    */
   function bindingTone(binding: Binding): 'ok' | 'warn' | 'error' {
@@ -535,7 +537,7 @@
     return 'tables.binding.missing';
   }
 
-  /** 绑定异常的详细一行（列出变了 / 缺了的词库名） */
+  /** 绑定异常的详细一行（列出变了 / 缺了的词典名） */
   function bindingDetail(binding: Binding): string {
     if (binding.kind === 'drifted') {
       return t('tables.binding.driftedDetail', {
@@ -561,7 +563,7 @@
 
   // ---------------------------------------------------------------- 主词频表
 
-  /** 把某个作用域设为主表（词表与字表一起换，口径只能有一套） */
+  /** 把某个作用域设为主表（词频表与字表一起换，口径只能有一套） */
   async function makePrimary(scope: string) {
     if (scope === primary) return;
     tableBusy = `primary:${scope}`;
@@ -578,31 +580,55 @@
 
   // ---------------------------------------------------------------- 相加
 
-  function toggleComposePick(key: string) {
-    composePicks = composePicks.includes(key)
-      ? composePicks.filter((item) => item !== key)
-      : [...composePicks, key];
+  /** 按当前勾选自动生成新表名（如 `news + wiki`）；无勾选时为空 */
+  function autoComposeName(): string {
+    return composePicks.join(' + ');
   }
 
-  /** 勾选里的表种类（相加一次只处理一类；混着选会在后端被拒） */
-  const composeKinds = $derived([...new Set(composePicks.map((k) => k.split('/').pop() ?? ''))]);
+  /** 勾选 / 取消勾选一个**作用域**（域相加：整域的 word+char 一起加） */
+  function toggleComposePick(scope: string) {
+    composePicks = composePicks.includes(scope)
+      ? composePicks.filter((s) => s !== scope)
+      : [...composePicks, scope];
+    // 用户还没手动改过名字时，随勾选自动预填组合名
+    if (!composeNameTouched) composeName = autoComposeName();
+  }
+
+  /** 所有作用域是否已全选 */
+  function composeAllPicked(): boolean {
+    return scopes.length > 0 && scopes.every((s) => composePicks.includes(s));
+  }
+
+  /** 全选 / 取消全选所有作用域 */
+  function toggleComposeAll() {
+    composePicks = composeAllPicked() ? [] : [...scopes];
+    if (!composeNameTouched) composeName = autoComposeName();
+  }
+
+  /** 某作用域下现有的表（word / char） */
+  function composeScopeTables(scope: string): TableMeta[] {
+    return meta?.tables.filter((t) => t.path === scope) ?? [];
+  }
 
   async function runCompose() {
     if (composePicks.length === 0) {
       composeError = t('tables.compose.needPick');
       return;
     }
-    if (composeKinds.length > 1) {
-      composeError = t('tables.compose.mixedKinds');
-      return;
-    }
+    // 域相加：勾选的是**作用域**，展开成该域存在的每类表，词表+字表一起加。
+    // 后端 `kind` 不给 = 源表里出现过的每一类都产出（见 compose.rs），跨类天然合法。
+    const sources = composePicks.flatMap((scope) =>
+      (['word', 'char'] as const)
+        .filter((kind) => meta?.tables.some((t) => t.path === scope && t.kind === kind))
+        .map((kind) => tableKey(scope, kind))
+    );
     composeBusy = true;
     composeError = '';
     composeDone = '';
     const res = await composeTables({
-      sources: composePicks,
+      sources,
       scope: composeName.trim() || t('tables.compose.defaultName'),
-      kind: composeKinds[0] || null,
+      kind: null,
     });
     composeBusy = false;
     if (!res.ok) {
@@ -617,6 +643,7 @@
     });
     composePicks = [];
     composeName = '';
+    composeNameTouched = false;
     // 新表要立刻出现在清单与作用域选择里
     await refreshTables();
     const current = await activeDataset();
@@ -846,8 +873,8 @@
       </CardContent>
     </Card>
   {:else}
-    <!-- ==================== 词表库（数据文件夹 tables\） ==================== -->
-    <Card data-testid="library-tables-card">
+    <!-- ==================== 词频表库（数据文件夹 tables\） ==================== -->
+    <Card data-testid="library-tables-card" data-section="library">
       <CardHeader>
         <div class="flex flex-wrap items-center gap-2">
           <CardTitle>{t('tables.library.title')}</CardTitle>
@@ -879,7 +906,7 @@
           </p>
         {/if}
 
-        <!-- 当前激活表的绑定状态：词库外置之后最关键的一块，必须显眼 -->
+        <!-- 当前激活表的绑定状态：词典外置之后最关键的一块，必须显眼 -->
         {#if library && library.active_binding}
           {@const tone = bindingTone(library.active_binding)}
           <div
@@ -1080,7 +1107,7 @@
       })}
 
       <!-- ==================== A. 频率表（全部作用域，平等） ==================== -->
-      <Card data-testid="table-list-card">
+      <Card data-testid="table-list-card" data-section="list">
         <CardHeader>
           <div class="flex flex-wrap items-center gap-2">
             <CardTitle>{t('tables.listTitle')}</CardTitle>
@@ -1166,7 +1193,7 @@
       </Card>
 
       <!-- ==================== B. 相加 ==================== -->
-      <Card data-testid="compose-card">
+      <Card data-testid="compose-card" data-section="compose">
         <CardHeader>
           <div class="flex flex-wrap items-center gap-2">
             <CardTitle>{t('tables.compose.title')}</CardTitle>
@@ -1180,26 +1207,47 @@
           <CardDescription>{t('tables.compose.description')}</CardDescription>
         </CardHeader>
         <CardContent class="flex flex-col gap-3">
-          <div class="flex flex-wrap items-center gap-1.5">
-            <span class="mr-1 text-xs font-medium">{t('tables.compose.pickLabel')}</span>
-            {#each rows as row (tableKey(row.scope, row.table.kind))}
-              {@const key = tableKey(row.scope, row.table.kind)}
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium">{t('tables.compose.pickLabel')}</span>
               <button
                 type="button"
-                aria-pressed={composePicks.includes(key)}
-                class={cn(
-                  'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                  composePicks.includes(key)
-                    ? 'border-primary/40 bg-primary/10 font-medium text-primary'
-                    : 'border-border hover:bg-accent'
-                )}
-                onclick={() => toggleComposePick(key)}
-                data-compose-pick={key}
+                class="text-[11px] text-primary hover:underline"
+                onclick={() => toggleComposeAll()}
+                data-compose-select-all
               >
-                {key}
-                <span class="ml-1 text-[10px] text-muted-foreground">{formatInt(row.table.entries)}</span>
+                {composeAllPicked() ? t('common.clear') : t('tables.compose.selectAll')}
               </button>
-            {/each}
+            </div>
+            <div class="max-h-64 overflow-auto rounded-lg border border-border">
+              {#each scopes as scope (scope)}
+                {@const tables = composeScopeTables(scope)}
+                {@const wordTable = tables.find((t) => t.kind === 'word')}
+                {@const charTable = tables.find((t) => t.kind === 'char')}
+                <label
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+                  data-compose-row={scope}
+                >
+                  <input
+                    type="checkbox"
+                    class="size-3.5 accent-[var(--primary)]"
+                    checked={composePicks.includes(scope)}
+                    onchange={() => toggleComposePick(scope)}
+                    data-compose-pick={scope}
+                  />
+                  <span class="min-w-0 flex-1 truncate font-medium">{scope}</span>
+                  <span class="shrink-0 text-[10px] text-muted-foreground"
+                    >{wordTable ? t('table.word') : ''}{wordTable && charTable ? ' + ' : ''}{charTable ? t('table.char') : ''}</span
+                  >
+                  <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground"
+                    >{wordTable ? formatInt(wordTable.entries) : ''}</span
+                  >
+                  <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground"
+                    >{wordTable ? formatRatio(lastTierCoverage(wordTable), { digits: 3 }) : ''}</span
+                  >
+                </label>
+              {/each}
+            </div>
           </div>
 
           <div class="flex flex-wrap items-end gap-2">
@@ -1209,7 +1257,12 @@
                 type="text"
                 class="w-56 rounded border border-input bg-surface px-2 py-1 text-xs"
                 placeholder={t('tables.compose.namePlaceholder')}
-                bind:value={composeName}
+                value={composeName}
+                oninput={(e) => {
+                  composeName = e.currentTarget.value;
+                  // 用户手动输入过 → 之后的勾选不再自动覆盖，直到清空/重置
+                  composeNameTouched = true;
+                }}
                 data-testid="compose-name"
               />
             </label>
@@ -1226,6 +1279,8 @@
               disabled={composeBusy || composePicks.length === 0}
               onclick={() => {
                 composePicks = [];
+                composeName = '';
+                composeNameTouched = false;
                 composeError = '';
               }}
             >
@@ -1251,7 +1306,7 @@
       </Card>
 
       <!-- ==================== C. 分组自定义 ==================== -->
-      <Card data-testid="tier-config-card">
+      <Card data-testid="tier-config-card" data-section="tier">
         <CardHeader>
           <div class="flex flex-wrap items-center gap-2">
             <CardTitle>{t('tables.tierConfigTitle')}</CardTitle>

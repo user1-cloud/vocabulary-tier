@@ -28,6 +28,9 @@ export const en: Messages = {
   'common.no': 'No',
 
   // ---------------------------------------------------------------- 导航
+  'nav.group.analyze.label': 'Analyze',
+  'nav.group.data.label': 'Data',
+  'nav.group.system.label': 'System',
   'nav.wordfreq.label': 'Generate Frequency Tables',
   'nav.wordfreq.title': 'Generate Frequency Tables',
   'nav.wordfreq.description': 'Import a corpus directory, count word/character frequency, and export result tables.',
@@ -211,7 +214,7 @@ export const en: Messages = {
     'These parameters are written into meta.json and saved as the defaults for the Settings page.',
   'wordfreq.step2.threads': 'Threads (0 = auto)',
   'wordfreq.step2.minCount': 'Minimum frequency',
-  // 词库链：多选，**顺序有意义**（第一个是主词库）
+  // 词典链：多选，**顺序有意义**（第一个是主词典）
   'wordfreq.step2.dictChain': 'Dictionary chain',
   'wordfreq.step2.dictChainBadge': 'Order matters',
   'wordfreq.step2.dictChainHint':
@@ -433,7 +436,7 @@ export const en: Messages = {
   /** 带前缀的形式（「词条详情」面板用）：`{message}` 是上面某一条 */
   'bounds.fallbackNotice': 'Effective thresholds fell back: {message}',
 
-  // ---------------------------------------------------------------- 词库管理页
+  // ---------------------------------------------------------------- 词典管理页
   'dicts.browserPreview':
     'Browser preview mode: a demo data folder (including one broken file and one dictionary with pitfalls); importing and deleting only affect memory.',
   'dicts.loading': 'Reading the data folder…',
@@ -462,7 +465,7 @@ export const en: Messages = {
   'dicts.readyMismatch':
     'Note: the usable-dictionary check in the UI disagrees with the backend’s library_ready result. Please re-check.',
 
-  // 词库清单
+  // 词典清单
   'dicts.listTitle': 'Dictionaries',
   'dicts.countBadge': '{count} files',
   'dicts.listDescription':
@@ -561,6 +564,8 @@ export const en: Messages = {
     'Add several tables together into a new one (written into the same output directory as another peer scope). The addition is **exact**: the scan itself scans each scope and accumulates, so the sum of the scope tables equals the whole-corpus table entry for entry.',
   'tables.compose.pickLabel': 'Tables to add',
   'tables.compose.pickedBadge': '{count} selected',
+  'tables.compose.selectAll': 'Select all',
+  'tables.compose.clearGroup': 'Clear group',
   'tables.compose.nameLabel': 'New scope name',
   'tables.compose.namePlaceholder': 'e.g. sum:news+wiki',
   'tables.compose.defaultName': 'sum',
@@ -573,7 +578,7 @@ export const en: Messages = {
   'tables.compose.note':
     'Cost: one extra table on disk (roughly the size of a scanned table). Delete the sources above to reclaim the space if you no longer need them; the new table can itself be added up again.',
 
-  // A2. 词表管理（数据文件夹 tables\）+ 词库绑定状态
+  // A2. 词频表管理（数据文件夹 tables\）+ 词典绑定状态
   'tables.library.title': 'Table management',
   'tables.library.countBadge': '{count} tables',
   'tables.library.description':

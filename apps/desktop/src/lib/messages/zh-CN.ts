@@ -42,6 +42,9 @@ export const zhCN = {
   'common.no': '否',
 
   // ---------------------------------------------------------------- 导航
+  'nav.group.analyze.label': '分析',
+  'nav.group.data.label': '数据',
+  'nav.group.system.label': '系统',
   'nav.wordfreq.label': '生成词频表',
   'nav.wordfreq.title': '生成词频表',
   'nav.wordfreq.description': '导入语料目录，统计字词出现频率并导出结果表。',
@@ -51,10 +54,10 @@ export const zhCN = {
   'nav.leaderboard.label': '排行榜',
   'nav.leaderboard.title': '排行榜',
   'nav.leaderboard.description': '按频次、覆盖率、词长等维度查看字词排名。',
-  'nav.dicts.label': '词库管理',
-  'nav.dicts.title': '词库管理',
+  'nav.dicts.label': '词典管理',
+  'nav.dicts.title': '词典管理',
   'nav.dicts.description':
-    '管理数据文件夹里的词库（jieba 格式的 .dict）：导入、删除，并看清每一份的隐患。',
+    '管理数据文件夹里的词典（jieba 格式的 .dict）：导入、删除，并看清每一份的隐患。',
   'nav.tables.label': '表管理',
   'nav.tables.title': '表管理',
   'nav.tables.description': '开关参与分域对比与排行榜的表，自定义七组分组阈值。',
@@ -139,25 +142,25 @@ export const zhCN = {
   'settings.tokenize.skipSingleChar': '跳过单字词',
   'settings.tokenize.skipSingleCharHint': '只统计多字词（字表仍会产出）',
   'settings.tokenize.domainTables': '默认产出分域表',
-  'settings.tokenize.domainTablesHint': '关闭后只产出全库词表 / 字表，产物更小',
+  'settings.tokenize.domainTablesHint': '关闭后只产出全库词频表 / 字表，产物更小',
 
   // 默认目录与词典
   'settings.paths.title': '目录',
   'settings.paths.description':
-    '划句分析读取的是「数据文件夹」里 tables\\ 下的词表；词库则放在同一个文件夹的 dicts\\ 下。',
-  /** 数据文件夹的徽标（它同时装词库与词表，和旧的「输出目录」不是一回事了） */
+    '划句分析读取的是「数据文件夹」里 tables\\ 下的词频表；词典则放在同一个文件夹的 dicts\\ 下。',
+  /** 数据文件夹的徽标（它同时装词典与词频表，和旧的「输出目录」不是一回事了） */
   'settings.paths.dataDirBadge': '数据文件夹',
   'settings.paths.corpusDir': '默认语料库目录',
   'settings.paths.dataDir': '数据文件夹',
   'settings.paths.dataDirHint':
-    '里面是 dicts\\（词库库）与 tables\\（词表库）两个子目录。留空表示用系统默认位置。',
+    '里面是 dicts\\（词典库）与 tables\\（词频表库）两个子目录。留空表示用系统默认位置。',
   'settings.paths.openDataDir': '打开数据文件夹',
-  // `userDict` 已废弃：词库现在是数据文件夹里的条目，在扫描时按顺序勾选
+  // `userDict` 已废弃：词典现在是数据文件夹里的条目，在扫描时按顺序勾选
   'settings.paths.userDictDeprecatedTitle': '「自定义词典」这个设置已废弃',
   'settings.paths.userDictDeprecatedBody':
-    '词库不再是一个额外的文件路径，而是数据文件夹 dicts\\ 里的普通条目 —— 在「生成词频表」页按顺序勾选（第一个是主词库），也可以在「词库管理」页导入或删除。',
+    '词典不再是一个额外的文件路径，而是数据文件夹 dicts\\ 里的普通条目 —— 在「生成词频表」页按顺序勾选（第一个是主词典），也可以在「词典管理」页导入或删除。',
   'settings.paths.userDictWillMigrate':
-    '旧值 {path} 会在下次启动时被后端迁移进扫描用的词库链，之后这个字段不再写出。',
+    '旧值 {path} 会在下次启动时被后端迁移进扫描用的词典链，之后这个字段不再写出。',
   'settings.paths.unset': '未设置',
   'settings.pickCorpusDir': '选择默认语料库目录',
   'settings.pickDataDir': '选择数据文件夹',
@@ -182,10 +185,10 @@ export const zhCN = {
     '浏览器预览模式：正在使用内置演示数据，完整流程可以点通（目录选择器不可用，可直接编辑路径输入框）。',
   'wordfreq.loading': '正在读取已有设置…',
   // 页首那句「当前打开的是哪张表」——统计完成后会自动刷新
-  'wordfreq.currentTable.label': '当前词表：',
+  'wordfreq.currentTable.label': '当前词频表：',
   'wordfreq.currentTable.meta': '生成于 {generated} · {tables} 张表',
   'wordfreq.currentTable.none':
-    '还没有打开任何词表。先在下面完成一次统计，或到「表管理」页激活一张已有的表。',
+    '还没有打开任何词频表。先在下面完成一次统计，或到「表管理」页激活一张已有的表。',
   'wordfreq.currentTable.manage': '表管理',
 
   // 步骤条
@@ -219,21 +222,21 @@ export const zhCN = {
   'wordfreq.step2.description': '这些参数会写进 meta.json，并作为设置页的默认值保存。',
   'wordfreq.step2.threads': '线程数（0 = 自动）',
   'wordfreq.step2.minCount': '最小词频',
-  // 词库链：多选，**顺序有意义**（第一个是主词库）
-  'wordfreq.step2.dictChain': '词库链',
+  // 词典链：多选，**顺序有意义**（第一个是主词典）
+  'wordfreq.step2.dictChain': '词典链',
   'wordfreq.step2.dictChainBadge': '顺序有意义',
   'wordfreq.step2.dictChainHint':
-    '勾选要用的词库，**先勾的是主词库**；后面的依次叠加，同名条目以后面的为准。一个都不勾表示用 dicts\\ 里的全部 .dict（按文件名排序）。',
-  'wordfreq.step2.dictPrimary': '主词库',
+    '勾选要用的词典，**先勾的是主词典**；后面的依次叠加，同名条目以后面的为准。一个都不勾表示用 dicts\\ 里的全部 .dict（按文件名排序）。',
+  'wordfreq.step2.dictPrimary': '主词典',
   'wordfreq.step2.dictOrder': '第 {index} 份',
-  'wordfreq.step2.dictCheckAria': '使用词库 {name}',
+  'wordfreq.step2.dictCheckAria': '使用词典 {name}',
   'wordfreq.step2.dictEffective': '按顺序装载：{names}',
-  'wordfreq.step2.dictEffectiveAll': '未指定 → 使用全部可用词库（按文件名排序）：{names}',
-  'wordfreq.step2.dictUseAll': '改用全部词库',
-  'wordfreq.step2.dictsLoading': '正在读取词库清单…',
+  'wordfreq.step2.dictEffectiveAll': '未指定 → 使用全部可用词典（按文件名排序）：{names}',
+  'wordfreq.step2.dictUseAll': '改用全部词典',
+  'wordfreq.step2.dictsLoading': '正在读取词典清单…',
   'wordfreq.step2.noUsableDict':
-    '数据文件夹里没有可用的词库。词库外置之后没有内置兜底，请先到「词库管理」导入一份 .dict，否则统计出来的是一张只有单字的废表。',
-  'wordfreq.step2.goDicts': '词库管理',
+    '数据文件夹里没有可用的词典。词典外置之后没有内置兜底，请先到「词典管理」导入一份 .dict，否则统计出来的是一张只有单字的废表。',
+  'wordfreq.step2.goDicts': '词典管理',
   'wordfreq.step2.hmm': '开启 HMM 新词发现',
   'wordfreq.step2.hmmHint': '识别词典外的连续汉字组合',
   'wordfreq.step2.hmmAria': '开启 HMM',
@@ -242,7 +245,7 @@ export const zhCN = {
   'wordfreq.step2.keepLatin': '保留拉丁词',
   'wordfreq.step2.keepLatinHint': '如 API、token 作为独立词条',
   'wordfreq.step2.skipSingleChar': '跳过单字词',
-  'wordfreq.step2.skipSingleCharHint': '只统计词表中的多字词（字表仍单独产出）',
+  'wordfreq.step2.skipSingleCharHint': '只统计词频表中的多字词（字表仍单独产出）',
   'wordfreq.step2.domainTables': '产出分域表',
   'wordfreq.step2.domainTablesHint': '关闭后只产出全库表，体积更小',
   'wordfreq.step2.writeTsv': '写出可读 TSV',
@@ -256,8 +259,8 @@ export const zhCN = {
   'wordfreq.step3.tableName': '表名',
   'wordfreq.step3.tableNamePlaceholder': '例如 2024 新闻语料',
   'wordfreq.step3.tableNameHint':
-    '表名决定默认输出目录（<数据文件夹>\\tables\\<表名>），也是「词表管理」里那张表的名字。',
-  'wordfreq.step3.newTable': '新的词表',
+    '表名决定默认输出目录（<数据文件夹>\\tables\\<表名>），也是「词频表管理」里那张表的名字。',
+  'wordfreq.step3.newTable': '新的词频表',
   'wordfreq.step3.defaultTableName': '{corpus} 语料表',
   'wordfreq.step3.resuggestOut': '按表名重新预填',
   'wordfreq.step3.outPlaceholder': '例如 <数据文件夹>\\tables\\我的表',
@@ -267,11 +270,11 @@ export const zhCN = {
   'wordfreq.step3.scanning': '统计中…',
   'wordfreq.step3.cancel': '取消',
   'wordfreq.step3.openOutDir': '打开输出目录',
-  // 数据文件夹里没有可用词库时挡住「开始统计」
-  'wordfreq.libNotReady.title': '没有可用的词库，无法开始统计。',
+  // 数据文件夹里没有可用词典时挡住「开始统计」
+  'wordfreq.libNotReady.title': '没有可用的词典，无法开始统计。',
   'wordfreq.libNotReady.body':
-    '词库不再编在程序里：数据文件夹的 dicts\\ 里至少要有一份能读的 .dict，否则跑出来的是一张只有单字的废表。',
-  'wordfreq.libNotReady.go': '去词库管理',
+    '词典不再编在程序里：数据文件夹的 dicts\\ 里至少要有一份能读的 .dict，否则跑出来的是一张只有单字的废表。',
+  'wordfreq.libNotReady.go': '去词典管理',
   'wordfreq.scanFailed': '统计失败：{error}',
   'wordfreq.needCorpus': '请先填写或选择语料库目录。',
   'wordfreq.pickCorpusDir': '选择语料库目录',
@@ -312,8 +315,8 @@ export const zhCN = {
   'wordfreq.result.digits': '数字词 {value}',
   'wordfreq.result.latin': '拉丁词 {value}',
   'wordfreq.result.skipSingle': '跳过单字 {value}',
-  /** `dicts[0]` 是主词库；v1 的 `dict` / `user_dict` 已废弃，不再单独显示 */
-  'wordfreq.result.dicts': '词库链 {names}',
+  /** `dicts[0]` 是主词典；v1 的 `dict` / `user_dict` 已废弃，不再单独显示 */
+  'wordfreq.result.dicts': '词典链 {names}',
   'wordfreq.result.done':
     '统计完成 ✅ 现在可以去「{sentences}」页粘贴文本，查看每个词的频率分组；也可以在「{leaderboard}」页浏览完整排行。',
 
@@ -331,7 +334,7 @@ export const zhCN = {
   'sentences.noTable.step1': '去「生成词频表」页选择语料库并开始统计',
   'sentences.noTable.step2': '统计完成后回到本页，这里会自动加载新产物',
   'sentences.noTable.go': '去生成词频表',
-  'sentences.noTable.goDicts': '去词库管理',
+  'sentences.noTable.goDicts': '去词典管理',
   'sentences.noTable.recheck': '重新检查',
 
   // 产物未装载到后端
@@ -345,9 +348,9 @@ export const zhCN = {
   'sentences.dataset.title': '数据集',
   'sentences.dataset.ready': '已就绪',
   'sentences.dataset.hmm': 'HMM {value}',
-  'sentences.dataset.dictChain': '词库链 {count} 份：{names}',
+  'sentences.dataset.dictChain': '词典链 {count} 份：{names}',
   'sentences.dataset.summary':
-    '{generated} 生成 · 全库 {tokens} token · 词表 {wordTable} · 字表 {charTable}',
+    '{generated} 生成 · 全库 {tokens} token · 词频表 {wordTable} · 字表 {charTable}',
   'sentences.tableEntries': '{entries} 条',
 
   // 文本输入
@@ -384,8 +387,8 @@ export const zhCN = {
   'sentences.result.description':
     '悬停任意词，右侧「词条详情」面板显示它的频次、排名、前 %、占比与分域排名；点击词条可钉住详情。',
   'sentences.result.thresholdHint':
-    '词表与字表的七组阈值都可以在「表管理」页自定义，这里按生效阈值着色。',
-  'sentences.result.averageBaseline': '平均每 token 占比基准：词表 {word} · 字表 {char}',
+    '词频表与字表的七组阈值都可以在「表管理」页自定义，这里按生效阈值着色。',
+  'sentences.result.averageBaseline': '平均每 token 占比基准：词频表 {word} · 字表 {char}',
   'sentences.empty.selection': '请在文本框中划选一段文字，或切换到「分析全文」。',
   'sentences.empty.none': '暂无可分析的内容，先粘贴一段文字试试。',
 
@@ -422,9 +425,9 @@ export const zhCN = {
   // ---------------------------------------------------------------- 生效阈值回退警告
   // 这些是**错误码对应的文案**：错误码本身在 `types.ts::BoundsWarning`，
   // `format.ts::boundsInfo` 只回 `{ key, params }`，渲染交给展示层。
-  // 词表/字表分成两条（而不是 `{kind}阈值…`）：省掉展示层的嵌套查表，
+  // 词频表/字表分成两条（而不是 `{kind}阈值…`）：省掉展示层的嵌套查表，
   // 也让英文翻译能按语境各自措辞。
-  'bounds.invalidWord': '词表阈值必须是非负整数、严格递增、共 {count} 个，已临时回退到 meta 默认值。',
+  'bounds.invalidWord': '词频表阈值必须是非负整数、严格递增、共 {count} 个，已临时回退到 meta 默认值。',
   'bounds.invalidChar': '字表阈值必须是非负整数、严格递增、共 {count} 个，已临时回退到 meta 默认值。',
   'bounds.invalidPct': '前%上界必须是 0~100 之间、严格递增、共 {count} 个，已临时回退到这张表的默认口径。',
   'bounds.evenNoEntries': '这张表的词条数是 0，无法按词条数等分，已回退到 meta 默认值。',
@@ -436,13 +439,13 @@ export const zhCN = {
   /** 带前缀的形式（「词条详情」面板用）：`{message}` 是上面某一条 */
   'bounds.fallbackNotice': '生效阈值有回退：{message}',
 
-  // ---------------------------------------------------------------- 词库管理页
-  // 词库外置之后 `dicts\` 里那些 .dict 文件的管理界面。
+  // ---------------------------------------------------------------- 词典管理页
+  // 词典外置之后 `dicts\` 里那些 .dict 文件的管理界面。
   // 「预置」只是个展示徽标，**没有任何权限等级**：预置项同样可以删。
   'dicts.browserPreview':
-    '浏览器预览模式：下面是一份演示数据文件夹（含一份坏文件与一份有隐患的词库），导入 / 删除只作用于内存。',
+    '浏览器预览模式：下面是一份演示数据文件夹（含一份坏文件与一份有隐患的词典），导入 / 删除只作用于内存。',
   'dicts.loading': '正在读取数据文件夹…',
-  'dicts.loadFailed': '读取词库清单失败：{error}',
+  'dicts.loadFailed': '读取词典清单失败：{error}',
   'dicts.origin.seeded': '预置',
   'dicts.origin.imported': '导入',
   'dicts.origin.scanned': '自己扫',
@@ -451,56 +454,56 @@ export const zhCN = {
   // 数据文件夹
   'dicts.dataDirTitle': '数据文件夹',
   'dicts.dataDirDescription':
-    '词库（dicts\\）与词表（tables\\）都住在这里。换文件夹只建目录、不搬运已有内容，并且会清掉当前激活的表。',
+    '词典（dicts\\）与词频表（tables\\）都住在这里。换文件夹只建目录、不搬运已有内容，并且会清掉当前激活的表。',
   'dicts.defaultLocation': '默认位置',
-  'dicts.readyBadge': '有可用词库',
-  'dicts.notReadyBadge': '没有可用词库',
+  'dicts.readyBadge': '有可用词典',
+  'dicts.notReadyBadge': '没有可用词典',
   'dicts.openDataDir': '打开所在文件夹',
   'dicts.openDictsDir': '打开 dicts\\',
   'dicts.changeDataDir': '更换数据文件夹',
-  'dicts.dataDirLayout': '词库目录：{dicts} · 词表目录：{tables}',
+  'dicts.dataDirLayout': '词典目录：{dicts} · 词频表目录：{tables}',
   'dicts.dataDirChanged': '数据文件夹已改为 {dir}。当前激活的表已被清空，请到「表管理」页重新激活一张。',
   'dicts.pickDataDir': '选择数据文件夹',
   'dicts.noUsableDict':
-    '这里一份能读的词库都没有，无法开始统计 —— 词库不再编在程序里，没有内置兜底。请先导入一份 .dict。',
-  'dicts.readyMismatch': '提示：界面上的可用词库判断与后端 library_ready 的结果不一致，请重新检查一次。',
+    '这里一份能读的词典都没有，无法开始统计 —— 词典不再编在程序里，没有内置兜底。请先导入一份 .dict。',
+  'dicts.readyMismatch': '提示：界面上的可用词典判断与后端 library_ready 的结果不一致，请重新检查一次。',
 
-  // 词库清单
-  'dicts.listTitle': '词库清单',
+  // 词典清单
+  'dicts.listTitle': '词典清单',
   'dicts.countBadge': '{count} 份',
   'dicts.listDescription':
-    '一份词库就是一个 .dict 文件（jieba 的「词 词频 词性」，每行一条）。文件是普通文本，可以直接用记事本改，改完的内容指纹会变，依赖它的表会显示「词库已变」。',
-  'dicts.empty': '数据文件夹里还没有任何 .dict 文件。点右上角「导入词库」放一份进来。',
-  'dicts.import': '导入词库',
-  'dicts.pickDictFile': '选择词库文件（.dict）',
-  'dicts.dictFilter': 'jieba 词库',
+    '一份词典就是一个 .dict 文件（jieba 的「词 词频 词性」，每行一条）。文件是普通文本，可以直接用记事本改，改完的内容指纹会变，依赖它的表会显示「词典已变」。',
+  'dicts.empty': '数据文件夹里还没有任何 .dict 文件。点右上角「导入词典」放一份进来。',
+  'dicts.import': '导入词典',
+  'dicts.pickDictFile': '选择词典文件（.dict）',
+  'dicts.dictFilter': 'jieba 词典',
   'dicts.imported': '已导入：{name}',
   'dicts.entries': '{count} 条有效词条',
   'dicts.brokenBadge': '读不了',
   'dicts.error': '文件有问题：{error}',
   'dicts.revealFile': '打开所在文件夹',
   'dicts.delete': '删除',
-  'dicts.deleted': '已删除词库 {name}。',
+  'dicts.deleted': '已删除词典 {name}。',
   'dicts.deletedWithUsers':
-    '已删除词库 {name}。这些表引用了它，现在会显示「词库缺失」：{tables}。',
+    '已删除词典 {name}。这些表引用了它，现在会显示「词典缺失」：{tables}。',
   'dicts.usedByTables': '被这些表引用：{tables}',
 
   // 隐患提示
   'dicts.warnFreqZero':
-    '{count} 条把词频写成了 0。jieba 那一列是**概率权重**不是词频，写成 0 的词**永远切不出来**，只会在词表里占个位置。想留它们就把数字改成正数，不想留就删掉那几行。',
+    '{count} 条把词频写成了 0。jieba 那一列是**概率权重**不是词频，写成 0 的词**永远切不出来**，只会在词频表里占个位置。想留它们就把数字改成正数，不想留就删掉那几行。',
   'dicts.warnFreqOmitted':
     '{count} 条没有写词频列。装载时按 suggest_freq 折算，权重通常比显式写出来的更低，实际排序可能和你的预期不同。',
   'dicts.skippedLines': '跳过 {comments} 行注释、{blanks} 行空行。',
 
   // 删除确认（就地展开）
-  'dicts.confirmDeleteTitle': '确认删除词库「{name}」？',
+  'dicts.confirmDeleteTitle': '确认删除词典「{name}」？',
   'dicts.confirmDeleteUsed':
-    '有 {count} 张表用到了它：{tables}。删掉之后这些表会变成「词库缺失」，分词口径与建表时不一致，频次不可信 —— 需要在「表管理」里对它们重新统计。',
+    '有 {count} 张表用到了它：{tables}。删掉之后这些表会变成「词典缺失」，分词口径与建表时不一致，频次不可信 —— 需要在「表管理」里对它们重新统计。',
   'dicts.confirmDeleteNote':
-    '文件会从数据文件夹里直接删除，不进回收站，无法撤销。预置词库也可以删（这里没有权限等级的区别）。',
+    '文件会从数据文件夹里直接删除，不进回收站，无法撤销。预置词典也可以删（这里没有权限等级的区别）。',
   'dicts.confirmDeleteYes': '确认删除',
   'dicts.noPermissionNote':
-    '说明：预置词库和用户自己导入的完全是同一种东西，没有权限等级，都可以删除或改名。上方的来源徽标只是用来告诉你它是怎么来的。',
+    '说明：预置词典和用户自己导入的完全是同一种东西，没有权限等级，都可以删除或改名。上方的来源徽标只是用来告诉你它是怎么来的。',
 
   // ---------------------------------------------------------------- 表管理页
   'tables.previewCapNote': '有 {skipped} 个阈值大于这张表的词条数（{entries} 条），预览里已夹到词条总数；真实分组判定不受影响。',
@@ -527,7 +530,7 @@ export const zhCN = {
   'tables.scopeCountBadge': '{count} 个作用域',
   'tables.primaryBadge': '主表：{scope}',
   'tables.primaryDescription':
-    '每个作用域各有一张词表 + 一张字表，它们**完全平级**（`full` 只是"所有域加在一起"的那一个）。{emphasis}，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表只做对比。',
+    '每个作用域各有一张词频表 + 一张字表，它们**完全平级**（`full` 只是"所有域加在一起"的那一个）。{emphasis}，划句分析的着色与分组、排行榜、分组阈值预览都以它为准，其余表只做对比。',
   'tables.primaryEmphasis': '勾选「主表」决定"这个词有多常见"',
   'tables.equalNote':
     '表格里每张表都是同一份产物里的一个作用域，没有全库表与分域表的区别。想换一个"最常见"的基准就改主表；想把几个域合成一张新表就用下面的「相加」。',
@@ -541,7 +544,7 @@ export const zhCN = {
   'tables.selectAll': '全选',
   'tables.selectNone': '全不选',
   'tables.onlyFull': '只留全库',
-  'tables.onlyWord': '只留词表',
+  'tables.onlyWord': '只留词频表',
   'tables.onlyChar': '只留字表',
   'tables.resetAllEnabled': '重置为全部启用',
   'tables.col.scope': '作用域',
@@ -555,7 +558,7 @@ export const zhCN = {
   'tables.sourceScanned': '扫描产出',
   'tables.sourceComposed': '相加（{count} 张）',
   'tables.countHint':
-    '提示：扫描时用了 `--skip-domain-tables` 或只统计了部分分域时，作用域会少一些。完整产物是「全量 + 每个一级子目录」各一张词表 + 一张字表。',
+    '提示：扫描时用了 `--skip-domain-tables` 或只统计了部分分域时，作用域会少一些。完整产物是「全量 + 每个一级子目录」各一张词频表 + 一张字表。',
 
   // B. 相加
   'tables.compose.title': '相加',
@@ -563,29 +566,31 @@ export const zhCN = {
     '把若干张表加起来成一张新表（结果写在同一个产物目录里，作为另一个平级作用域）。相加是**精确**的：扫描本身就是逐作用域扫完再累加，所以各域表相加逐条等于全量扫描出来的那张表。',
   'tables.compose.pickLabel': '要相加的表',
   'tables.compose.pickedBadge': '已选 {count} 张',
+  'tables.compose.selectAll': '全选',
+  'tables.compose.clearGroup': '清空本组',
   'tables.compose.nameLabel': '新作用域名',
   'tables.compose.namePlaceholder': '例如：相加：新闻与维基',
   'tables.compose.defaultName': '相加',
   'tables.compose.run': '相加',
   'tables.compose.running': '相加中…',
   'tables.compose.needPick': '先勾选至少一张要相加的表。',
-  'tables.compose.mixedKinds': '一次只能相加同一类（词表或字表）。分两次相加即可。',
+  'tables.compose.mixedKinds': '一次只能相加同一类（词频表或字表）。分两次相加即可。',
   'tables.compose.done': '已相加出作用域「{scope}」：{kinds}，{entries} 条。',
   'tables.compose.doneShort': '已相加出「{scope}」',
   'tables.compose.note':
-    '代价：磁盘上会多出一份表（大约等于一张扫描出来的表）。源表不需要了可以在上面的词表管理里删掉回收空间；新表本身也可以再被相加。',
+    '代价：磁盘上会多出一份表（大约等于一张扫描出来的表）。源表不需要了可以在上面的词频表管理里删掉回收空间；新表本身也可以再被相加。',
 
-  // A2. 词表管理（数据文件夹 tables\）+ 词库绑定状态
-  //   这是词库外置之后最关键的一块：词库能被用户随手改，改了以后旧表的频次就
+  // A2. 词频表管理（数据文件夹 tables\）+ 词典绑定状态
+  //   这是词典外置之后最关键的一块：词典能被用户随手改，改了以后旧表的频次就
   //   跟分词口径对不上了，所以绑定状态必须显眼，并给一键重新统计。
-  'tables.library.title': '词表管理',
+  'tables.library.title': '词频表管理',
   'tables.library.countBadge': '{count} 张表',
   'tables.library.description':
-    '数据文件夹 tables\\ 下的词表，外加"指向数据文件夹之外的产物目录"那一张。每张表都记录着它建表时用的词库链（带 sha256 指纹），这里是校验结果。',
+    '数据文件夹 tables\\ 下的词频表，外加"指向数据文件夹之外的产物目录"那一张。每张表都记录着它建表时用的词典链（带 sha256 指纹），这里是校验结果。',
   'tables.library.activeBadge': '当前激活：{name}',
   'tables.library.dataDir': '数据文件夹：{dir}',
-  'tables.library.loadFailed': '读取词表清单失败：{error}',
-  'tables.library.empty': '数据文件夹里还没有词表。去「生成词频表」页统计一次，产物就会落到这里。',
+  'tables.library.loadFailed': '读取词频表清单失败：{error}',
+  'tables.library.empty': '数据文件夹里还没有词频表。去「生成词频表」页统计一次，产物就会落到这里。',
   'tables.library.active': '激活中',
   'tables.library.external': '数据文件夹之外',
   'tables.library.corpus': '语料库：{corpus}',
@@ -597,27 +602,27 @@ export const zhCN = {
   'tables.library.rescanSuggestion': '一键重新统计',
   'tables.library.openDir': '打开所在文件夹',
   'tables.library.delete': '删除',
-  'tables.library.activated': '已激活「{name}」，分词器已按它记录的词库链重建。',
+  'tables.library.activated': '已激活「{name}」，分词器已按它记录的词典链重建。',
   'tables.library.activateFailed': '激活「{name}」失败：{error}',
-  'tables.library.deleted': '已删除词表「{name}」。',
+  'tables.library.deleted': '已删除词频表「{name}」。',
   'tables.library.deleteFailed': '删除「{name}」失败：{error}',
-  'tables.library.confirmDeleteTitle': '确认删除词表「{name}」？',
+  'tables.library.confirmDeleteTitle': '确认删除词频表「{name}」？',
   'tables.library.confirmDeleteNote':
     '整个产物目录会被删掉（meta.json 与全部 .vfr / .tsv），无法撤销。数据文件夹之外的表不给删除入口 —— 那个目录不归本程序管。',
   'tables.library.confirmDeleteYes': '确认删除',
-  'tables.library.activeBinding': '当前激活表的词库绑定：{label}',
-  'tables.library.dictChain': '词库链：{chain}',
+  'tables.library.activeBinding': '当前激活表的词典绑定：{label}',
+  'tables.library.dictChain': '词典链：{chain}',
   'tables.library.absentDicts': '（数据文件夹里找不到：{names}）',
 
   // 绑定状态（`Binding` 的四种取值）
-  'tables.binding.ok': '词库一致',
-  'tables.binding.legacy': '老产物，无词库记录，无从校验',
+  'tables.binding.ok': '词典一致',
+  'tables.binding.legacy': '老产物，无词典记录，无从校验',
   'tables.binding.legacyDetail':
-    '这是 schema v1 产物：当年词库编在程序里，产物只留了一句自由文本描述，没有指纹，所以既不能说它一致、也不能说它不一致。',
-  'tables.binding.drifted': '词库已变，频次可能不准',
-  'tables.binding.driftedDetail': '内容变了的词库：{changed}。分词口径已与建表时不同，建议重新统计。',
-  'tables.binding.missing': '找不到词库',
-  'tables.binding.missingDetail': '数据文件夹里已经没有这些词库：{missing}。重新统计前请先补回或改掉词库链。',
+    '这是 schema v1 产物：当年词典编在程序里，产物只留了一句自由文本描述，没有指纹，所以既不能说它一致、也不能说它不一致。',
+  'tables.binding.drifted': '词典已变，频次可能不准',
+  'tables.binding.driftedDetail': '内容变了的词典：{changed}。分词口径已与建表时不同，建议重新统计。',
+  'tables.binding.missing': '找不到词典',
+  'tables.binding.missingDetail': '数据文件夹里已经没有这些词典：{missing}。重新统计前请先补回或改掉词典链。',
 
   // B. 分组自定义
   'tables.tierConfigTitle': '分组自定义',
@@ -654,7 +659,7 @@ export const zhCN = {
   'tables.pctBoundsSaved': '前%上界已保存。',
   'tables.pctBoundsReset': '已恢复为这张表自带的默认前%口径。',
   'tables.pctNote':
-    '换算用的是**主表**的词表条目数（当前 {entries} 条）：前%上界 × 条目数 = 排名上界。换成条目数不同的表，同一组前%会得到不同的排名阈值 —— 这正是它比绝对排名更可比的原因。',
+    '换算用的是**主表**的词频表条目数（当前 {entries} 条）：前%上界 × 条目数 = 排名上界。换成条目数不同的表，同一组前%会得到不同的排名阈值 —— 这正是它比绝对排名更可比的原因。',
   'tables.solveFromPct': '换算成排名阈值并切到「按排名」',
   'tables.coverageTargetLabel': '累计覆盖率目标（%）',
   'tables.coverageTargetHint': '第 7 组固定是「以上全部」，所以只填 6 个，且必须严格递增',
@@ -666,11 +671,11 @@ export const zhCN = {
   'tables.curveLoading': '正在读取覆盖率曲线…',
   'tables.curvePoints': '{count} 点',
   'tables.curveSummary':
-    '曲线：{word}（词表）· {char}（字表）· Rust 侧按产物缓存，重复进入本页不会重算。',
-  'tables.solvedWordTitle': '词表反解结果',
+    '曲线：{word}（词频表）· {char}（字表）· Rust 侧按产物缓存，重复进入本页不会重算。',
+  'tables.solvedWordTitle': '词频表反解结果',
   'tables.solvedCharTitle': '字表反解结果',
   'tables.groupUpperLe': '第 {index} 组 ≤',
-  'tables.wordBoundsTitle': '词表阈值',
+  'tables.wordBoundsTitle': '词频表阈值',
   'tables.charBoundsTitle': '字表阈值',
   'tables.sixBoundsHint': '6 个排名上界',
   'tables.boundAria': '{kind}第 {index} 组排名上界',
@@ -678,7 +683,7 @@ export const zhCN = {
   'tables.previewTitle': '实时预览',
   'tables.previewHint':
     '改上面的数字会立刻重算；「组内词条数」在无曲线时是估算值，累计覆盖率取自曲线时是精确的',
-  'tables.wordPreview': '词表预览',
+  'tables.wordPreview': '词频表预览',
   'tables.charPreview': '字表预览',
   'tables.preview.col.name': '组名',
   'tables.preview.col.range': '阈值',
@@ -688,22 +693,22 @@ export const zhCN = {
   'tables.preview.col.source': '来源',
   'tables.sourceCurve': '曲线',
   'tables.sourceEstimated': '按分档比例估算',
-  'tables.legendTitle': '图例效果（词表生效阈值）',
+  'tables.legendTitle': '图例效果（词频表生效阈值）',
   'tables.applyNote':
     '设置即时生效并已保存：划句分析页的词条着色、悬停浮层与排行榜的分组列都按这份阈值重算。三个分组字段全是 null / \'rank\' 时，界面与 meta 默认分组完全一致。',
 
   // 操作提示（toast）
   'tables.saveFailed': '保存失败：{error}',
   'tables.methodSwitched': '分组方法已切换为「{method}」。',
-  'tables.wordBoundsSaved': '词表阈值已保存。',
+  'tables.wordBoundsSaved': '词频表阈值已保存。',
   'tables.charBoundsSaved': '字表阈值已保存。',
   'tables.coverageSaved': '覆盖率目标已保存。',
   'tables.coverageReset': '已恢复默认覆盖率目标（取自 meta 的累计覆盖率）。',
-  'tables.wordBoundsReset': '词表阈值已恢复为 meta 默认值。',
+  'tables.wordBoundsReset': '词频表阈值已恢复为 meta 默认值。',
   'tables.charBoundsReset': '字表阈值已恢复为 meta 默认值。',
   'tables.solveFailed': '拿不到覆盖率曲线，无法反解。',
   'tables.solveFailedWithError': '拿不到覆盖率曲线，无法反解：{error}。',
-  'tables.solved': '已用覆盖率曲线反解成排名阈值（词表：{ranks}），并切回「按排名」。',
+  'tables.solved': '已用覆盖率曲线反解成排名阈值（词频表：{ranks}），并切回「按排名」。',
 
   // ---------------------------------------------------------------- 排行榜页
   'leaderboard.browserPreview':
@@ -712,9 +717,9 @@ export const zhCN = {
   'leaderboard.statusFailed': '读取数据集状态失败：{error}',
   'leaderboard.noTable.title': '还没有可用的词频表',
   'leaderboard.noTable.description': '排行榜需要先生成频率表。当前检查的目录：',
-  'leaderboard.noDir': '（还没有打开任何词表）',
+  'leaderboard.noDir': '（还没有打开任何词频表）',
   'leaderboard.goWordFreq': '去生成词频表',
-  'leaderboard.goDicts': '去词库管理',
+  'leaderboard.goDicts': '去词典管理',
   'leaderboard.recheck': '重新检查',
   // 产物未装载到后端（与 tables.notLoaded.* 同构；原模板的「未成功 。。」里那个换行折出的
   // 空格和重复句号是源稿瑕疵，这里按干净形式写，见交付说明）
@@ -816,7 +821,7 @@ export const zhCN = {
   'popup.unpin': '取消钉住',
   'popup.summary': '{accepted} 词 · 未收录 {unknown} 种',
   /** meta 存在时才追加的表名段（与 popup.summary 拼成一行） */
-  'popup.summaryTable': ' · 词表 {entries} 条',
+  'popup.summaryTable': ' · 词频表 {entries} 条',
   'popup.detailEmpty': '还没有可显示的词条。',
   'popup.copyEmpty': '没有可复制的内容',
   'popup.copied': '已复制',
@@ -826,7 +831,7 @@ export const zhCN = {
   // ---------------------------------------------------------------- 词条详情（TokenDetail）
   'tokenDetail.emptyHint': '悬停上方任意词条，这里会显示它的频次、排名与分组详情。',
   'tokenDetail.pctNoRecord': '该词条在全库表里没有记录，因此没有占比。',
-  'tokenDetail.fullWord': '全库词表',
+  'tokenDetail.fullWord': '全库词频表',
   'tokenDetail.fullChar': '全库字表',
   'tokenDetail.pctNoTotal': '占比 = 该词条出现次数 ÷ {which}的总 token 数',
   'tokenDetail.pct': '占比 = 该词条出现次数 {count} ÷ {which}总 token 数 {total}',
@@ -843,7 +848,7 @@ export const zhCN = {
   'tokenDetail.pinned': '已钉住',
   'tokenDetail.skipped': '标点 / 空白，不参与统计',
   'tokenDetail.notCollected':
-    '语料库未收录：词表 / 字表里都没有这个词条，因此没有频次、排名与分组（与「极少」不同，那一组是有排名的真实分组）。',
+    '语料库未收录：词频表 / 字表里都没有这个词条，因此没有频次、排名与分组（与「极少」不同，那一组是有排名的真实分组）。',
   'tokenDetail.rangeLine': '{group} · 生效排名上界 {range}',
   // 铺平之后"各分域"其实就是"各张表"：同一个词在不同作用域里的排名对比。
   // 一律显示前%，因为排名绝对值跨表不可比（分域表只有几万条、全量表有几百万条）。
@@ -878,7 +883,7 @@ export const zhCN = {
   'format.durationHourMin': '{hours} 小时 {minutes} 分',
 
   // ---------------------------------------------------------------- 表与 token
-  'table.word': '词表',
+  'table.word': '词频表',
   'table.char': '字表',
   'table.none': '未查表',
 
